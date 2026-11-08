@@ -39,7 +39,9 @@ final class CodeEditorFactory {
     }
 
     static RSyntaxTextArea createJavaEditor(String initialText) {
-        return createEditor(SyntaxConstants.SYNTAX_STYLE_JAVA, initialText, 18, 40);
+        RSyntaxTextArea area = createEditor(SyntaxConstants.SYNTAX_STYLE_JAVA, initialText, 18, 40);
+        PlaywrightCompletionSupport.install(area);
+        return area;
     }
 
     static RTextScrollPane wrapWithLineNumbers(RSyntaxTextArea area) {

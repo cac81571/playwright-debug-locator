@@ -19,6 +19,7 @@
         <flatlaf.version>3.7.1</flatlaf.version>
         <groovy.version>4.0.26</groovy.version>
         <rsyntaxtextarea.version>3.5.4</rsyntaxtextarea.version>
+        <autocomplete.version>3.3.2</autocomplete.version>
     </properties>
 
     <dependencies>
@@ -41,6 +42,11 @@
             <groupId>com.fifesoft</groupId>
             <artifactId>rsyntaxtextarea</artifactId>
             <version>${rsyntaxtextarea.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fifesoft</groupId>
+            <artifactId>autocomplete</artifactId>
+            <version>${autocomplete.version}</version>
         </dependency>
     </dependencies>
 

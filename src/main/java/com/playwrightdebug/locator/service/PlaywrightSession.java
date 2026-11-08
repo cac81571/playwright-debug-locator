@@ -15,7 +15,6 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -226,29 +225,28 @@ public final class PlaywrightSession implements AutoCloseable {
             }
         }
 
-        // Stuck navigations often report blank page.url() while CDP already has the real URL.
-        Iterator<CdpTarget> unmatched = unmatchedTargets.iterator();
+        // URL mismatch (navigation race / trailing slash / etc.): pair leftovers by order,
+        // preferring CDP title/url so the dropdown reflects /json/list.
+        List<Page> leftoverPages = new ArrayList<>();
         for (Page page : playwrightPages) {
-            if (usedPages.contains(page)) {
-                continue;
+            if (!usedPages.contains(page)) {
+                leftoverPages.add(page);
             }
-            String pageUrl = urlsByPage.getOrDefault(page, "");
-            if (!pageUrl.isBlank()) {
-                continue;
+        }
+        int leftoverIndex = 0;
+        for (CdpTarget target : unmatchedTargets) {
+            if (leftoverIndex < leftoverPages.size()) {
+                Page page = leftoverPages.get(leftoverIndex++);
+                usedPages.add(page);
+                pages.add(new PageInfo(target.id(), target.title(), target.url(), page));
+            } else {
+                // New tab may appear in CDP before Playwright exposes a Page.
+                pages.add(new PageInfo(target.id(), target.title(), target.url(), null));
             }
-            if (!unmatched.hasNext()) {
-                break;
-            }
-            CdpTarget target = unmatched.next();
-            usedPages.add(page);
-            unmatched.remove();
-            pages.add(new PageInfo(target.id(), target.title(), target.url(), page));
         }
 
-        for (Page page : playwrightPages) {
-            if (usedPages.contains(page)) {
-                continue;
-            }
+        for (; leftoverIndex < leftoverPages.size(); leftoverIndex++) {
+            Page page = leftoverPages.get(leftoverIndex);
             String url = urlsByPage.getOrDefault(page, "");
             if (isBrowserUiTarget("", url)) {
                 continue;

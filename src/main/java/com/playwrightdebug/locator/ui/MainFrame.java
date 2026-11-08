@@ -23,7 +23,9 @@ import javax.swing.JComponent;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JSplitPane;
@@ -108,13 +110,14 @@ public final class MainFrame extends JFrame {
     private final JButton codegenButton = new JButton("Codegen");
     private final JButton recorderGenerateButton = createActionButton("Playwrightコード生成", this::generateRecorderJunit);
     private final JButton recorderPlaywrightRunButton = createActionButton("Playwright 実行", this::runRecorderPlaywright);
+    private final JButton recorderSnippetButton = createActionButton("スニペット", this::showRecorderSnippetMenu);
     private final JButton recorderCopyButton = createActionButton("コピー", this::copyRecorderJava);
     private final JLabel recorderRunErrorLabel = new JLabel();
     private final JLabel statusLabel = new JLabel("未接続");
 
     private final JComboBox<PageInfo> pageComboBox = new JComboBox<>();
     private final JSpinner connectTimeoutSpinner = new JSpinner(new SpinnerNumberModel(3000, 500, 120000, 500));
-    private final JSpinner timeoutSpinner = new JSpinner(new SpinnerNumberModel(1000, 500, 120000, 500));
+    private final JSpinner timeoutSpinner = new JSpinner(new SpinnerNumberModel(3000, 500, 120000, 500));
 
     private final JTextArea locatorGroovyArea = new JTextArea(LOCATOR_GROOVY_TEMPLATE, 8, 40);
     private final TextAreaUndoSupport locatorGroovyUndo = new TextAreaUndoSupport(
@@ -346,6 +349,7 @@ public final class MainFrame extends JFrame {
 
         JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         left.add(recorderPlaywrightRunButton);
+        left.add(recorderSnippetButton);
         left.add(recorderRunErrorLabel);
 
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
@@ -372,6 +376,16 @@ public final class MainFrame extends JFrame {
     private void clearRecorderRunError() {
         recorderRunErrorLabel.setText(" ");
         recorderRunErrorLabel.setVisible(false);
+    }
+
+    private void showRecorderSnippetMenu() {
+        JPopupMenu menu = new JPopupMenu();
+        for (PlaywrightSnippetCatalog.Snippet snippet : PlaywrightSnippetCatalog.all()) {
+            JMenuItem item = new JMenuItem(snippet.label());
+            item.addActionListener(e -> PlaywrightSnippetCatalog.insert(recorderJavaArea, snippet));
+            menu.add(item);
+        }
+        menu.show(recorderSnippetButton, 0, recorderSnippetButton.getHeight());
     }
 
     private JComponent createResultTabs() {
@@ -913,32 +927,49 @@ public final class MainFrame extends JFrame {
         for (PageInfo page : pages) {
             model.addElement(page);
         }
+        // Clear first so the closed combo repaints when index stays 0 but title/url changed.
+        pageComboBox.setModel(new DefaultComboBoxModel<>());
         pageComboBox.setModel(model);
 
+        int select = -1;
         if (previous != null) {
-            int urlOnlyMatch = -1;
             for (int i = 0; i < model.getSize(); i++) {
                 PageInfo candidate = model.getElementAt(i);
-                if (!candidate.url().equals(previous.url())) {
-                    continue;
-                }
-                if (candidate.title().equals(previous.title())) {
-                    pageComboBox.setSelectedIndex(i);
-                    return;
-                }
-                if (urlOnlyMatch < 0) {
-                    urlOnlyMatch = i;
+                if (candidate.id() != null && !candidate.id().isBlank()
+                        && candidate.id().equals(previous.id())) {
+                    select = i;
+                    break;
                 }
             }
-            if (urlOnlyMatch >= 0) {
-                pageComboBox.setSelectedIndex(urlOnlyMatch);
-                return;
+            if (select < 0) {
+                int urlOnlyMatch = -1;
+                for (int i = 0; i < model.getSize(); i++) {
+                    PageInfo candidate = model.getElementAt(i);
+                    if (!candidate.url().equals(previous.url())) {
+                        continue;
+                    }
+                    if (candidate.title().equals(previous.title())) {
+                        select = i;
+                        break;
+                    }
+                    if (urlOnlyMatch < 0) {
+                        urlOnlyMatch = i;
+                    }
+                }
+                if (select < 0) {
+                    select = urlOnlyMatch;
+                }
             }
         }
-
-        if (model.getSize() > 0) {
-            pageComboBox.setSelectedIndex(0);
+        if (select < 0 && model.getSize() > 0) {
+            select = 0;
         }
+        if (select >= 0) {
+            pageComboBox.setSelectedIndex(-1);
+            pageComboBox.setSelectedIndex(select);
+        }
+        pageComboBox.revalidate();
+        pageComboBox.repaint();
     }
 
     private void updateConnectionState(boolean connected) {
