@@ -165,6 +165,11 @@ public final class GroovyScriptService {
                 "com.microsoft.playwright.Playwright",
                 "com.microsoft.playwright.options.AriaRole",
                 "com.microsoft.playwright.Page.GetByRoleOptions",
+                "com.microsoft.playwright.Page.GetByLabelOptions",
+                "com.microsoft.playwright.Locator.GetByRoleOptions",
+                "com.microsoft.playwright.Locator.GetByLabelOptions",
+                "com.microsoft.playwright.Locator.ClickOptions",
+                "com.microsoft.playwright.Locator.DblclickOptions",
                 "com.microsoft.playwright.Locator.FilterOptions"
         );
         imports.addStarImports("com.microsoft.playwright.options");

@@ -58,20 +58,14 @@ public final class LocatorTestService {
         return result;
     }
 
-    public LocatorTestResult runTestScript(PlaywrightScriptContext context, LocatorInput input) {
+    public LocatorTestResult runTestScript(PlaywrightScriptContext context, LocatorInput input, double timeoutMs) {
         LocatorTestResult result = new LocatorTestResult();
         appendInputHeader(result, input);
+        result.addLine("タイムアウト: " + (int) timeoutMs + " ms");
         result.addLine("---");
         try {
             GroovyExecutionResult execution = evaluationService.executeGroovy(context, input.text());
-            if (execution.hasLocator()) {
-                result.addLine("戻り値: Locator (count=" + execution.locator().count() + ")");
-            } else if (execution.isVoidResult()) {
-                result.addLine("テストスクリプト実行成功");
-            } else {
-                result.addLine("戻り値: " + execution.rawResult());
-            }
-            result.setSuccess(true);
+            appendExecutionResult(result, execution);
         } catch (PlaywrightException ex) {
             result.addLine("実行失敗:");
             result.addLine(ex.getMessage());
@@ -81,6 +75,40 @@ public final class LocatorTestService {
             result.setSuccess(false);
         }
         return result;
+    }
+
+    public LocatorTestResult runRecorderJava(PlaywrightScriptContext context, String javaSource, double timeoutMs) {
+        LocatorTestResult result = new LocatorTestResult();
+        result.addLine("モード: Recorder Playwright");
+        result.addLine("タイムアウト: " + (int) timeoutMs + " ms");
+        result.addLine("---");
+        try {
+            String script = DevToolsRecorderConverter.extractExecutableScript(javaSource);
+            result.addLine("実行スクリプト:");
+            result.addLine(abbreviate(script));
+            result.addLine("---");
+            GroovyExecutionResult execution = evaluationService.executeGroovy(context, script);
+            appendExecutionResult(result, execution);
+        } catch (PlaywrightException ex) {
+            result.addLine("実行失敗:");
+            result.addLine(ex.getMessage());
+            result.setSuccess(false);
+        } catch (Exception ex) {
+            result.addLine("エラー: " + ex.getMessage());
+            result.setSuccess(false);
+        }
+        return result;
+    }
+
+    private static void appendExecutionResult(LocatorTestResult result, GroovyExecutionResult execution) {
+        if (execution.hasLocator()) {
+            result.addLine("戻り値: Locator (count=" + execution.locator().count() + ")");
+        } else if (execution.isVoidResult()) {
+            result.addLine("実行成功");
+        } else {
+            result.addLine("戻り値: " + execution.rawResult());
+        }
+        result.setSuccess(true);
     }
 
     public LocatorTestResult runClickTest(PlaywrightScriptContext context, LocatorInput input, double timeoutMs) {
@@ -200,7 +228,14 @@ public final class LocatorTestService {
     }
 
     private static void appendLocatorDiagnostics(LocatorTestResult result, Locator locator) {
-        int count = locator.count();
+        int count;
+        try {
+            count = locator.count();
+        } catch (Exception ex) {
+            result.addLine("count: (取得失敗) " + ex.getMessage());
+            result.setSuccess(false);
+            return;
+        }
         result.addLine("count: " + count);
 
         if (count == 0) {
@@ -209,31 +244,40 @@ public final class LocatorTestService {
             return;
         }
 
+        Locator target = count > 1 ? locator.first() : locator;
         if (count > 1) {
             result.addLine("警告: 複数一致 — click は strict mode エラーまたは意図しない要素の可能性");
-            LocatorDiagnostics.appendElementSummary(result, "先頭 (DOM 順 .first()):", locator.first());
+            LocatorDiagnostics.appendElementSummary(result, "先頭 (DOM 順 .first()):", target);
 
-            Locator visibleLocator = locator.filter(new Locator.FilterOptions().setVisible(true));
-            int visibleCount = visibleLocator.count();
-            result.addLine("visible count: " + visibleCount);
-            if (visibleCount > 0) {
-                LocatorDiagnostics.appendElementSummary(result, "先頭の visible 要素:", visibleLocator.first());
-            } else {
-                result.addLine("表示中の一致要素はありません");
+            try {
+                Locator visibleLocator = locator.filter(new Locator.FilterOptions().setVisible(true));
+                int visibleCount = visibleLocator.count();
+                result.addLine("visible count: " + visibleCount);
+                if (visibleCount > 0) {
+                    LocatorDiagnostics.appendElementSummary(result, "先頭の visible 要素:", visibleLocator.first());
+                } else {
+                    result.addLine("表示中の一致要素はありません");
+                }
+            } catch (Exception ex) {
+                result.addLine("visible count: (取得失敗) " + ex.getMessage());
             }
         } else {
             LocatorDiagnostics.appendElementSummary(result, "一致要素:", locator);
         }
 
-        LocatorDiagnostics.appendActionabilityHint(result, count > 1 ? locator.first() : locator);
+        LocatorDiagnostics.appendActionabilityHint(result, target);
 
         result.addLine("---");
-        boolean actionable = (count == 1 ? locator : locator.first()).isVisible()
-                && (count == 1 ? locator : locator.first()).isEnabled();
-        result.addLine(actionable
-                ? "結果: OK（click 可能な状態です）"
-                : "結果: 警告（click すると Call log のように失敗する可能性があります）");
-        result.setSuccess(actionable);
+        try {
+            boolean actionable = target.isVisible() && target.isEnabled();
+            result.addLine(actionable
+                    ? "結果: OK（click 可能な状態です）"
+                    : "結果: 警告（click すると Call log のように失敗する可能性があります）");
+            result.setSuccess(actionable);
+        } catch (Exception ex) {
+            result.addLine("結果: 判定失敗（" + ex.getMessage() + "）");
+            result.setSuccess(false);
+        }
     }
 
     private static void appendInputHeader(LocatorTestResult result, LocatorInput input) {
