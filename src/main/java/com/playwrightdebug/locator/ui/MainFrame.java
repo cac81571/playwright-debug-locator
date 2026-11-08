@@ -1,7 +1,6 @@
 package com.playwrightdebug.locator.ui;
 
 import com.microsoft.playwright.Page;
-import com.playwrightdebug.locator.model.LocatorInput;
 import com.playwrightdebug.locator.model.LocatorTestResult;
 import com.playwrightdebug.locator.model.PageInfo;
 import com.playwrightdebug.locator.model.PlaywrightScriptContext;
@@ -67,32 +66,6 @@ public final class MainFrame extends JFrame {
 
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
-    private static final String COMMON_GROOVY_IMPORTS = """
-            import com.microsoft.playwright.Page
-            import com.microsoft.playwright.Locator
-            import com.microsoft.playwright.options.AriaRole
-            import com.microsoft.playwright.Page.GetByRoleOptions
-            import com.microsoft.playwright.Locator.FilterOptions
-            """.stripIndent();
-
-    private static final String LOCATOR_GROOVY_TEMPLATE = COMMON_GROOVY_IMPORTS + """
-
-            // Locator を返す式（click 等のアクションは書かない）
-            page.getByRole(
-                AriaRole.BUTTON,
-                new GetByRoleOptions().setName("Google 検索")
-            )
-            """.stripIndent();
-
-    private static final String TEST_SCRIPT_TEMPLATE = COMMON_GROOVY_IMPORTS + """
-
-            // テストコードをそのまま記述（click, fill など）
-            page.getByRole(
-                AriaRole.BUTTON,
-                new GetByRoleOptions().setName("Google 検索")
-            ).click()
-            """.stripIndent();
-
     private final PlaywrightSession session = new PlaywrightSession();
     private final PlaywrightCodegenService codegenService = new PlaywrightCodegenService();
     private final LocatorTestService locatorTestService = new LocatorTestService();
@@ -103,36 +76,31 @@ public final class MainFrame extends JFrame {
         return thread;
     });
 
-    private final JTextField endpointField = new JTextField("http://localhost:9222", 28);
+    private static final String CDP_HOST = "localhost";
+
+    private final JLabel statusLabel = new JLabel("未接続");
+    private final JComboBox<String> portCombo = createPortCombo();
+    private final JTextField browserLaunchOptionField = new JTextField(26);
     private final JButton connectButton = new JButton("接続");
     private final JButton disconnectButton = new JButton("切断");
     private final JButton refreshPagesButton = new JButton("ページ更新");
     private final JButton codegenButton = new JButton("Codegen");
     private final JButton recorderGenerateButton = createActionButton("Playwrightコード生成", this::generateRecorderJunit);
+    private final JButton recorderAriaConvertButton = createActionButton("ARIA 変換", this::convertRecorderAria);
     private final JButton recorderPlaywrightRunButton = createActionButton("Playwright 実行", this::runRecorderPlaywright);
     private final JButton recorderSnippetButton = createActionButton("スニペット", this::showRecorderSnippetMenu);
     private final JButton recorderCopyButton = createActionButton("コピー", this::copyRecorderJava);
+    private final JLabel recorderAriaStatusLabel = new JLabel();
     private final JLabel recorderRunErrorLabel = new JLabel();
-    private final JLabel statusLabel = new JLabel("未接続");
 
     private final JComboBox<PageInfo> pageComboBox = new JComboBox<>();
     private final JSpinner connectTimeoutSpinner = new JSpinner(new SpinnerNumberModel(3000, 500, 120000, 500));
     private final JSpinner timeoutSpinner = new JSpinner(new SpinnerNumberModel(3000, 500, 120000, 500));
 
-    private final JTextArea locatorGroovyArea = new JTextArea(LOCATOR_GROOVY_TEMPLATE, 8, 40);
-    private final TextAreaUndoSupport locatorGroovyUndo = new TextAreaUndoSupport(
-            locatorGroovyArea,
-            locatorGroovyArea.getDocument()
-    );
-
-    private final JTextArea testScriptArea = new JTextArea(TEST_SCRIPT_TEMPLATE, 10, 40);
-    private final TextAreaUndoSupport testScriptUndo = new TextAreaUndoSupport(
-            testScriptArea,
-            testScriptArea.getDocument()
-    );
-
     private final RSyntaxTextArea recorderJsonArea = CodeEditorFactory.createJsonEditor("");
     private final RSyntaxTextArea recorderJavaArea = CodeEditorFactory.createJavaEditor("");
+    private final JTextArea completionsCatalogArea = new JTextArea(AssistCatalogStore.loadCompletionsText(), 18, 40);
+    private final JTextArea snippetsCatalogArea = new JTextArea(AssistCatalogStore.loadSnippetsText(), 18, 40);
 
     private final JTabbedPane workspaceTabs = new JTabbedPane();
     private final JTabbedPane resultTabs = new JTabbedPane();
@@ -144,13 +112,18 @@ public final class MainFrame extends JFrame {
 
     public MainFrame() {
         super("Playwright Debug Locator");
-        locatorGroovyArea.setTabSize(2);
-        testScriptArea.setTabSize(2);
         Font editorFont = new Font(Font.MONOSPACED, Font.PLAIN, 13);
         logArea.setFont(editorFont);
+        completionsCatalogArea.setFont(editorFont);
+        snippetsCatalogArea.setFont(editorFont);
+        completionsCatalogArea.setTabSize(2);
+        snippetsCatalogArea.setTabSize(2);
         setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
         setMinimumSize(new Dimension(980, 680));
         setLocationRelativeTo(null);
+
+        PlaywrightCompletionSupport.reloadFromText(completionsCatalogArea.getText());
+        PlaywrightSnippetCatalog.reloadFromText(snippetsCatalogArea.getText());
 
         JPanel root = new JPanel(new BorderLayout(8, 8));
         root.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
@@ -163,55 +136,35 @@ public final class MainFrame extends JFrame {
     }
 
     private JPanel createConnectionPanel() {
-        JPanel panel = new JPanel(new GridBagLayout());
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         panel.setBorder(BorderFactory.createTitledBorder("CDP 接続"));
-        GridBagConstraints gc = new GridBagConstraints();
-        gc.insets = new Insets(4, 4, 4, 4);
-        gc.anchor = GridBagConstraints.WEST;
-        gc.fill = GridBagConstraints.HORIZONTAL;
 
-        gc.gridx = 0;
-        gc.gridy = 0;
-        gc.weightx = 0;
-        panel.add(new JLabel("Endpoint URL"), gc);
+        browserLaunchOptionField.setEditable(false);
+        browserLaunchOptionField.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        browserLaunchOptionField.setToolTipText("Chrome / Edge の起動オプション（選択してコピー可）");
+        syncBrowserLaunchOption();
 
-        gc.gridx = 1;
-        gc.weightx = 1;
-        panel.add(endpointField, gc);
+        statusLabel.setFont(statusLabel.getFont().deriveFont(Font.BOLD));
 
-        gc.gridx = 2;
-        gc.weightx = 0;
-        panel.add(new JLabel("接続 Timeout (ms)"), gc);
-
-        gc.gridx = 3;
-        gc.weightx = 0;
-        panel.add(connectTimeoutSpinner, gc);
-
-        gc.gridx = 4;
-        gc.weightx = 0;
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        buttons.add(connectButton);
-        buttons.add(disconnectButton);
-        buttons.add(refreshPagesButton);
-        buttons.add(codegenButton);
-        panel.add(buttons, gc);
-
-        gc.gridx = 0;
-        gc.gridy = 1;
-        gc.gridwidth = 5;
-        statusLabel.putClientProperty("JComponent.sizeVariant", "small");
-        panel.add(statusLabel, gc);
-
+        panel.add(statusLabel);
+        panel.add(new JLabel("ポート"));
+        panel.add(portCombo);
+        panel.add(new JLabel("起動オプション"));
+        panel.add(browserLaunchOptionField);
+        panel.add(new JLabel("接続 Timeout (ms)"));
+        panel.add(connectTimeoutSpinner);
+        panel.add(connectButton);
+        panel.add(disconnectButton);
+        panel.add(codegenButton);
         return panel;
     }
 
     private JSplitPane createMainSplitPane() {
         JPanel workspace = new JPanel(new BorderLayout(8, 8));
         workspace.add(createSharedOptionsPanel(), BorderLayout.NORTH);
-        workspaceTabs.addTab("Recorder (JSON) 変換", createRecorderConversionPanel());
-        workspaceTabs.addTab("Locator 検証", createLocatorVerificationPanel());
-        workspaceTabs.addTab("テスト実行", createTestExecutionPanel());
-        workspaceTabs.setSelectedIndex(0);
+        workspaceTabs.addTab("Recorder", createRecorderConversionPanel());
+        workspaceTabs.addTab("補完", createCompletionsCatalogPanel());
+        workspaceTabs.addTab("スニペット", createSnippetsCatalogPanel());
         workspace.add(workspaceTabs, BorderLayout.CENTER);
 
         JComponent bottomPanel = createResultTabs();
@@ -254,9 +207,13 @@ public final class MainFrame extends JFrame {
 
         gc.gridx = 2;
         gc.weightx = 0;
-        panel.add(new JLabel("操作 Timeout (ms)"), gc);
+        panel.add(refreshPagesButton, gc);
 
         gc.gridx = 3;
+        gc.weightx = 0;
+        panel.add(new JLabel("操作 Timeout (ms)"), gc);
+
+        gc.gridx = 4;
         gc.weightx = 0;
         panel.add(timeoutSpinner, gc);
 
@@ -266,23 +223,60 @@ public final class MainFrame extends JFrame {
     private static final int ACTION_TOP_GAP = 10;
     private static final int SPLIT_DIVIDER_MARGIN = 8;
 
-    private JPanel createLocatorVerificationPanel() {
-        return createEditorWithActions(
-                new JScrollPane(locatorGroovyArea),
-                createActionButton("検証実行", this::runFullTest),
-                createActionButton("Count", () -> runLocatorAction(locatorTestService::count)),
-                createActionButton("Highlight", () -> runLocatorAction(locatorTestService::highlight)),
-                createActionButton("Hide Highlight", this::hideHighlight),
-                createActionButton("Wait Visible", this::waitForVisible),
-                createActionButton("一覧表示", this::listMatches)
-        );
+    private JPanel createCompletionsCatalogPanel() {
+        JLabel hint = new JLabel("形式: 挿入テキスト @ 表示条件 # 説明。表示順: 前方一致 → ----- → 条件一致 → ----- → その他（例: AriaRole.BUTTON @ getByRole(）");
+        hint.putClientProperty("JComponent.sizeVariant", "small");
+        JButton apply = createActionButton("適用して保存", this::applyCompletionsCatalog);
+        JButton reset = createActionButton("初期値に戻す", () -> {
+            completionsCatalogArea.setText(AssistCatalogStore.defaultCompletionsText());
+            completionsCatalogArea.setCaretPosition(0);
+        });
+        JPanel panel = new JPanel(new BorderLayout(0, 6));
+        panel.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        panel.add(hint, BorderLayout.NORTH);
+        panel.add(new JScrollPane(completionsCatalogArea), BorderLayout.CENTER);
+        panel.add(createActionPanel(apply, reset), BorderLayout.SOUTH);
+        return panel;
     }
 
-    private JPanel createTestExecutionPanel() {
-        return createEditorWithActions(
-                new JScrollPane(testScriptArea),
-                createActionButton("テスト実行", this::runTestScript)
-        );
+    private JPanel createSnippetsCatalogPanel() {
+        JLabel hint = new JLabel("### ラベル の次行からコード。スニペットボタンのメニューに反映されます。");
+        hint.putClientProperty("JComponent.sizeVariant", "small");
+        JButton apply = createActionButton("適用して保存", this::applySnippetsCatalog);
+        JButton reset = createActionButton("初期値に戻す", () -> {
+            snippetsCatalogArea.setText(AssistCatalogStore.defaultSnippetsText());
+            snippetsCatalogArea.setCaretPosition(0);
+        });
+        JPanel panel = new JPanel(new BorderLayout(0, 6));
+        panel.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        panel.add(hint, BorderLayout.NORTH);
+        panel.add(new JScrollPane(snippetsCatalogArea), BorderLayout.CENTER);
+        panel.add(createActionPanel(apply, reset), BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private void applyCompletionsCatalog() {
+        String text = completionsCatalogArea.getText();
+        try {
+            AssistCatalogStore.saveCompletionsText(text);
+            PlaywrightCompletionSupport.reloadFromText(text);
+            int count = AssistCatalogStore.parseCompletions(text).size();
+            appendLog("補完カタログを適用しました (" + count + " 件) → " + AssistCatalogStore.completionsPath());
+        } catch (Exception ex) {
+            appendLog("補完カタログの保存に失敗: " + ex.getMessage());
+        }
+    }
+
+    private void applySnippetsCatalog() {
+        String text = snippetsCatalogArea.getText();
+        try {
+            AssistCatalogStore.saveSnippetsText(text);
+            PlaywrightSnippetCatalog.reloadFromText(text);
+            int count = AssistCatalogStore.parseSnippets(text).size();
+            appendLog("スニペットカタログを適用しました (" + count + " 件) → " + AssistCatalogStore.snippetsPath());
+        } catch (Exception ex) {
+            appendLog("スニペットカタログの保存に失敗: " + ex.getMessage());
+        }
     }
 
     private JPanel createRecorderConversionPanel() {
@@ -292,11 +286,10 @@ public final class MainFrame extends JFrame {
         RTextScrollPane javaScroll = CodeEditorFactory.wrapWithLineNumbers(recorderJavaArea);
         javaScroll.setBorder(BorderFactory.createTitledBorder("Playwright JUnit (Java)"));
 
-        JPanel jsonSide = createEditorWithActions(
-                jsonScroll,
-                createActionButton("JSON を開く", this::openRecorderJsonFile),
-                recorderGenerateButton
-        );
+        JPanel jsonSide = new JPanel(new BorderLayout(0, 0));
+        jsonSide.add(jsonScroll, BorderLayout.CENTER);
+        jsonSide.add(createRecorderJsonActionPanel(), BorderLayout.SOUTH);
+
         JPanel javaSide = new JPanel(new BorderLayout(0, 0));
         javaSide.add(javaScroll, BorderLayout.CENTER);
         javaSide.add(createRecorderJavaActionPanel(), BorderLayout.SOUTH);
@@ -335,6 +328,24 @@ public final class MainFrame extends JFrame {
         return panel;
     }
 
+    private JPanel createRecorderJsonActionPanel() {
+        recorderAriaStatusLabel.setFont(recorderAriaStatusLabel.getFont().deriveFont(Font.BOLD));
+        clearRecorderAriaStatus();
+
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.add(Box.createVerticalStrut(ACTION_TOP_GAP));
+
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        actions.setAlignmentX(Component.LEFT_ALIGNMENT);
+        actions.add(createActionButton("JSON を開く", this::openRecorderJsonFile));
+        actions.add(recorderGenerateButton);
+        actions.add(recorderAriaConvertButton);
+        actions.add(recorderAriaStatusLabel);
+        panel.add(actions);
+        return panel;
+    }
+
     private JPanel createRecorderJavaActionPanel() {
         recorderRunErrorLabel.setFont(recorderRunErrorLabel.getFont().deriveFont(Font.BOLD));
         recorderRunErrorLabel.setText(" ");
@@ -349,16 +360,30 @@ public final class MainFrame extends JFrame {
 
         JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         left.add(recorderPlaywrightRunButton);
-        left.add(recorderSnippetButton);
         left.add(recorderRunErrorLabel);
+
+        JPanel center = new JPanel(new FlowLayout(FlowLayout.CENTER, 6, 0));
+        center.add(recorderSnippetButton);
 
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         right.add(recorderCopyButton);
 
         row.add(left, BorderLayout.WEST);
+        row.add(center, BorderLayout.CENTER);
         row.add(right, BorderLayout.EAST);
         panel.add(row);
         return panel;
+    }
+
+    private void showRecorderAriaStatus(String text, Color color) {
+        recorderAriaStatusLabel.setForeground(color);
+        recorderAriaStatusLabel.setText(text);
+        recorderAriaStatusLabel.setVisible(true);
+    }
+
+    private void clearRecorderAriaStatus() {
+        recorderAriaStatusLabel.setText(" ");
+        recorderAriaStatusLabel.setVisible(false);
     }
 
     private void showRecorderRunError() {
@@ -431,6 +456,26 @@ public final class MainFrame extends JFrame {
         disconnectButton.addActionListener(e -> disconnect());
         refreshPagesButton.addActionListener(e -> refreshPages());
         codegenButton.addActionListener(e -> launchCodegen());
+        portCombo.addActionListener(e -> syncBrowserLaunchOption());
+        JTextField portEditor = portComboEditor();
+        if (portEditor != null) {
+            portEditor.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+                @Override
+                public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                    syncBrowserLaunchOption();
+                }
+
+                @Override
+                public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                    syncBrowserLaunchOption();
+                }
+
+                @Override
+                public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                    syncBrowserLaunchOption();
+                }
+            });
+        }
 
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
@@ -443,9 +488,15 @@ public final class MainFrame extends JFrame {
     }
 
     private void connect() {
+        final String endpoint;
+        try {
+            endpoint = cdpEndpointUrl();
+        } catch (RuntimeException ex) {
+            appendLog("ポート番号が不正です: " + ex.getMessage());
+            return;
+        }
         setBusy(true);
         double connectTimeout = connectTimeoutMs();
-        String endpoint = endpointField.getText().trim();
         appendLog("CDP 接続中: " + endpoint + " (timeout " + (int) connectTimeout + " ms)");
         uiExecutor.submit(() -> {
             try {
@@ -462,6 +513,7 @@ public final class MainFrame extends JFrame {
                 SwingUtilities.invokeLater(() -> appendLog("CDP 接続完了。ページ一覧を取得中..."));
                 List<PageInfo> pages = session.listPages();
                 SwingUtilities.invokeLater(() -> {
+                    rememberCurrentPort();
                     updateConnectionState(true);
                     setPageItems(pages);
                     appendLog("接続成功。ページ数: " + pages.size());
@@ -589,6 +641,71 @@ public final class MainFrame extends JFrame {
         appendLog("生成コードをクリップボードにコピーしました");
     }
 
+    private void convertRecorderAria() {
+        String javaSource = recorderJavaArea.getText();
+        if (javaSource == null || javaSource.isBlank()) {
+            appendLog("ARIA 変換する Playwright コードがありません。先に Playwrightコード生成してください");
+            return;
+        }
+        if (!session.isConnected()) {
+            appendLog("先に CDP 接続してください");
+            return;
+        }
+        PageInfo selected = (PageInfo) pageComboBox.getSelectedItem();
+        if (selected == null) {
+            appendLog("ページを選択してください");
+            return;
+        }
+
+        double timeout = timeoutMs();
+        long hardTimeoutMs = Math.max(5_000L, (long) timeout + 3_000L);
+        setBusy(true);
+        clearRecorderAriaStatus();
+        appendLog("ARIA 変換中...");
+        uiExecutor.submit(() -> {
+            try {
+                LiveJavaRoleEnricher.Result enriched = session.run(() -> {
+                    Page page = session.requirePage(selected);
+                    page.setDefaultTimeout(timeout);
+                    page.setDefaultNavigationTimeout(timeout);
+                    page.context().setDefaultTimeout(timeout);
+                    page.context().setDefaultNavigationTimeout(timeout);
+                    return LiveJavaRoleEnricher.enrich(page, javaSource);
+                }, hardTimeoutMs);
+                SwingUtilities.invokeLater(() -> {
+                    if (enriched.replacements() > 0) {
+                        int caret = recorderJavaArea.getCaretPosition();
+                        recorderJavaArea.setText(enriched.source());
+                        int max = recorderJavaArea.getDocument().getLength();
+                        recorderJavaArea.setCaretPosition(Math.max(0, Math.min(caret, max)));
+                        showRecorderAriaStatus(enriched.replacements() + " 箇所変換", new Color(0, 140, 40));
+                        appendLog("ARIA 変換: " + enriched.replacements()
+                                + " 箇所を @aria コメントから getByRole に更新");
+                    } else {
+                        showRecorderAriaStatus("変換なし", new Color(120, 120, 120));
+                        appendLog("ARIA 変換: 置換対象はありませんでした");
+                    }
+                    if (enriched.notes() != null) {
+                        for (String note : enriched.notes()) {
+                            appendLog("  - " + note);
+                        }
+                    }
+                    setBusy(false);
+                });
+            } catch (Exception ex) {
+                SwingUtilities.invokeLater(() -> {
+                    updateConnectionState(session.isConnected());
+                    showRecorderAriaStatus("変換失敗", new Color(200, 0, 0));
+                    appendLog("ARIA 変換失敗: " + ex.getMessage());
+                    if (!session.isConnected()) {
+                        pageComboBox.setModel(new DefaultComboBoxModel<>());
+                    }
+                    setBusy(false);
+                });
+            }
+        });
+    }
+
     private void runRecorderPlaywright() {
         String javaSource = recorderJavaArea.getText();
         if (javaSource == null || javaSource.isBlank()) {
@@ -617,45 +734,27 @@ public final class MainFrame extends JFrame {
         setBusy(true);
         clearRecorderRunError();
         clearStrictModeState();
-        appendLog("Recorder Playwright を実行中... (hard timeout " + hardTimeoutMs + " ms)");
+        appendLog("Recorder Playwright を実行中... (ARIA 変換なし / hard timeout " + hardTimeoutMs + " ms)");
         uiExecutor.submit(() -> {
             try {
-                EnrichAndRunOutcome outcome = session.run(() -> {
+                LocatorTestResult result = session.run(() -> {
                     Page page = session.requirePage(selected);
                     page.setDefaultTimeout(timeout);
                     page.setDefaultNavigationTimeout(timeout);
                     page.context().setDefaultTimeout(timeout);
                     page.context().setDefaultNavigationTimeout(timeout);
-
-                    LiveJavaRoleEnricher.Result enriched = LiveJavaRoleEnricher.enrich(page, javaSource);
-                    String sourceToRun = enriched.source() == null ? javaSource : enriched.source();
                     PlaywrightScriptContext context = session.createContext(page);
-                    LocatorTestResult result = locatorTestService.runRecorderJava(context, sourceToRun, timeout);
-                    return new EnrichAndRunOutcome(result, enriched);
+                    return locatorTestService.runRecorderJava(context, javaSource, timeout);
                 }, hardTimeoutMs);
                 SwingUtilities.invokeLater(() -> {
-                    LiveJavaRoleEnricher.Result enriched = outcome.enriched();
-                    if (enriched.replacements() > 0) {
-                        int caret = recorderJavaArea.getCaretPosition();
-                        recorderJavaArea.setText(enriched.source());
-                        int max = recorderJavaArea.getDocument().getLength();
-                        recorderJavaArea.setCaretPosition(Math.max(0, Math.min(caret, max)));
-                        appendLog("実行時 ARIA 補完: " + enriched.replacements()
-                                + " 箇所を @aria コメントから getByRole に更新");
-                    }
-                    if (enriched.notes() != null) {
-                        for (String note : enriched.notes()) {
-                            appendLog("  - " + note);
-                        }
-                    }
-                    appendLog(outcome.result().asText());
+                    appendLog(result.asText());
                     setBusy(false);
-                    if (outcome.result().isSuccess()) {
+                    if (result.isSuccess()) {
                         showRecorderRunSuccess();
                     } else {
                         showRecorderRunError();
                     }
-                    offerStrictModeFixIfPresent(outcome.result().asText());
+                    offerStrictModeFixIfPresent(result.asText());
                 });
             } catch (Exception ex) {
                 SwingUtilities.invokeLater(() -> {
@@ -670,9 +769,6 @@ public final class MainFrame extends JFrame {
                 });
             }
         });
-    }
-
-    private record EnrichAndRunOutcome(LocatorTestResult result, LiveJavaRoleEnricher.Result enriched) {
     }
 
     private void offerStrictModeFixIfPresent(String errorText) {
@@ -795,12 +891,7 @@ public final class MainFrame extends JFrame {
     }
 
     private JTextComponent activeScriptEditor() {
-        return switch (workspaceTabs.getSelectedIndex()) {
-            case 0 -> recorderJavaArea;
-            case 1 -> locatorGroovyArea;
-            case 2 -> testScriptArea;
-            default -> null;
-        };
+        return recorderJavaArea;
     }
 
     private double connectTimeoutMs() {
@@ -809,116 +900,6 @@ public final class MainFrame extends JFrame {
 
     private double timeoutMs() {
         return ((Number) timeoutSpinner.getValue()).doubleValue();
-    }
-
-    private LocatorInput currentLocatorInput() {
-        return new LocatorInput(LocatorInput.EvaluationMode.GROOVY, locatorGroovyArea.getText());
-    }
-
-    private LocatorInput currentTestInput() {
-        return new LocatorInput(LocatorInput.EvaluationMode.TEST_SCRIPT, testScriptArea.getText());
-    }
-
-    private void runFullTest() {
-        runOnSelectedPage(currentLocatorInput(), context -> locatorTestService.runFullTest(
-                context,
-                currentLocatorInput(),
-                timeoutMs()
-        ));
-    }
-
-    private void runTestScript() {
-        runOnSelectedPage(currentTestInput(), context -> locatorTestService.runTestScript(
-                context,
-                currentTestInput(),
-                timeoutMs()
-        ));
-    }
-
-    private void waitForVisible() {
-        runOnSelectedPage(currentLocatorInput(), context -> locatorTestService.waitForVisible(
-                context,
-                currentLocatorInput(),
-                timeoutMs()
-        ));
-    }
-
-    private void listMatches() {
-        runOnSelectedPage(currentLocatorInput(), context -> locatorTestService.listMatches(
-                context,
-                currentLocatorInput(),
-                20
-        ));
-    }
-
-    private void hideHighlight() {
-        runOnSelectedPage(currentLocatorInput(), context -> locatorTestService.hideHighlight(context.page()));
-    }
-
-    @FunctionalInterface
-    private interface LocatorContextAction {
-        LocatorTestResult run(PlaywrightScriptContext context);
-    }
-
-    @FunctionalInterface
-    private interface LocatorInputAction {
-        LocatorTestResult run(PlaywrightScriptContext context, LocatorInput input);
-    }
-
-    private void runLocatorAction(LocatorInputAction action) {
-        LocatorInput input = currentLocatorInput();
-        runOnSelectedPage(input, context -> action.run(context, input));
-    }
-
-    private void runOnSelectedPage(LocatorInput input, LocatorContextAction action) {
-        if (!session.isConnected()) {
-            appendLog("先に CDP 接続してください");
-            return;
-        }
-
-        PageInfo selected = (PageInfo) pageComboBox.getSelectedItem();
-        if (selected == null) {
-            appendLog("ページを選択してください");
-            return;
-        }
-
-        if (input.text() == null || input.text().isBlank()) {
-            appendLog("式を入力してください");
-            return;
-        }
-
-        setBusy(true);
-        double timeout = timeoutMs();
-        // Playwright が navigation wait でタイムアウトしない場合があるため、UI 側で打ち切る
-        long hardTimeoutMs = Math.max(1_000L, (long) timeout + 2_000L);
-        uiExecutor.submit(() -> {
-            try {
-                LocatorTestResult result = session.run(() -> {
-                    Page page = session.requirePage(selected);
-                    page.setDefaultTimeout(timeout);
-                    page.setDefaultNavigationTimeout(timeout);
-                    page.context().setDefaultTimeout(timeout);
-                    page.context().setDefaultNavigationTimeout(timeout);
-                    PlaywrightScriptContext context = session.createContext(page);
-                    return action.run(context);
-                }, hardTimeoutMs);
-                SwingUtilities.invokeLater(() -> {
-                    appendLog(result.asText());
-                    setBusy(false);
-                    offerStrictModeFixIfPresent(result.asText());
-                });
-            } catch (Exception ex) {
-                SwingUtilities.invokeLater(() -> {
-                    updateConnectionState(session.isConnected());
-                    appendLog("実行失敗: " + ex.getMessage());
-                    if (!session.isConnected()) {
-                        pageComboBox.setModel(new DefaultComboBoxModel<>());
-                    }
-                    setBusy(false);
-                    offerStrictModeFixIfPresent(ex.getMessage());
-                });
-            }
-        });
     }
 
     private void setPageItems(List<PageInfo> pages) {
@@ -977,13 +958,72 @@ public final class MainFrame extends JFrame {
         disconnectButton.setEnabled(connected);
         refreshPagesButton.setEnabled(connected);
         recorderGenerateButton.setEnabled(true);
+        recorderAriaConvertButton.setEnabled(connected);
         recorderPlaywrightRunButton.setEnabled(connected);
         pageComboBox.setEnabled(connected);
-        endpointField.setEnabled(!connected);
+        portCombo.setEnabled(!connected);
         connectTimeoutSpinner.setEnabled(!connected);
-        statusLabel.setText(connected
-                ? "接続中: " + session.getEndpointUrl()
-                : "未接続 — Chrome/Edge を --remote-debugging-port=9222 で起動してください");
+        statusLabel.setText(connected ? "接続中" : "未接続");
+        statusLabel.setForeground(connected ? new Color(0, 140, 40) : new Color(200, 0, 0));
+    }
+
+    private static JComboBox<String> createPortCombo() {
+        DefaultComboBoxModel<String> model = new DefaultComboBoxModel<>();
+        for (String port : PortHistoryStore.load()) {
+            model.addElement(port);
+        }
+        JComboBox<String> combo = new JComboBox<>(model);
+        combo.setEditable(true);
+        combo.setSelectedItem(PortHistoryStore.lastPort());
+        combo.setPrototypeDisplayValue("65535");
+        return combo;
+    }
+
+    private JTextField portComboEditor() {
+        Component editor = portCombo.getEditor().getEditorComponent();
+        return editor instanceof JTextField field ? field : null;
+    }
+
+    private String portText() {
+        Object item = portCombo.getEditor().getItem();
+        if (item == null) {
+            item = portCombo.getSelectedItem();
+        }
+        return item == null ? "" : item.toString().trim();
+    }
+
+    private void rememberCurrentPort() {
+        List<String> history = PortHistoryStore.remember(portText());
+        Object current = portText();
+        DefaultComboBoxModel<String> model = new DefaultComboBoxModel<>();
+        for (String port : history) {
+            model.addElement(port);
+        }
+        portCombo.setModel(model);
+        portCombo.setSelectedItem(current);
+    }
+
+    private int cdpPort() {
+        String raw = portText();
+        int port = Integer.parseInt(raw);
+        if (port < 1 || port > 65535) {
+            throw new IllegalArgumentException("ポートは 1〜65535 の範囲で指定してください: " + raw);
+        }
+        return port;
+    }
+
+    private String cdpEndpointUrl() {
+        return "http://" + CDP_HOST + ":" + cdpPort();
+    }
+
+    private String browserLaunchOptionText() {
+        String raw = portText();
+        return "--remote-debugging-port=" + (raw.isEmpty() ? "?" : raw);
+    }
+
+    private void syncBrowserLaunchOption() {
+        browserLaunchOptionField.setText(browserLaunchOptionText());
+        browserLaunchOptionField.setCaretPosition(0);
     }
 
     private void appendLog(String message) {
@@ -997,6 +1037,7 @@ public final class MainFrame extends JFrame {
         disconnectButton.setEnabled(!busy && session.isConnected());
         refreshPagesButton.setEnabled(!busy && session.isConnected());
         recorderGenerateButton.setEnabled(!busy);
+        recorderAriaConvertButton.setEnabled(!busy && session.isConnected());
         recorderPlaywrightRunButton.setEnabled(!busy && session.isConnected());
     }
 }

@@ -3,6 +3,7 @@ package com.playwrightdebug.locator.ui;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.Document;
 import javax.swing.text.JTextComponent;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -13,41 +14,28 @@ final class PlaywrightSnippetCatalog {
     record Snippet(String label, String code) {
     }
 
+    private static volatile List<Snippet> cached = List.of();
+
     private PlaywrightSnippetCatalog() {
     }
 
+    static void reload() {
+        reloadFromText(AssistCatalogStore.loadSnippetsText());
+    }
+
+    static void reloadFromText(String catalogText) {
+        List<Snippet> next = new ArrayList<>();
+        for (AssistCatalogStore.SnippetItem item : AssistCatalogStore.parseSnippets(catalogText)) {
+            next.add(new Snippet(item.label(), item.code()));
+        }
+        cached = List.copyOf(next);
+    }
+
     static List<Snippet> all() {
-        return List.of(
-                new Snippet("navigate",
-                        "page.navigate(\"https://example.com/\");"),
-                new Snippet("setViewport",
-                        "page.setViewportSize(1280, 720);"),
-                new Snippet("getByRole → click",
-                        "page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName(\"\").setExact(true)).click();"),
-                new Snippet("getByRole → fill",
-                        "page.getByRole(AriaRole.TEXTBOX, new Page.GetByRoleOptions().setName(\"\").setExact(true)).fill(\"\");"),
-                new Snippet("getByLabel → fill",
-                        "page.getByLabel(\"\").fill(\"\");"),
-                new Snippet("getByText → click",
-                        "page.getByText(\"\").click();"),
-                new Snippet("locator(CSS) → click",
-                        "page.locator(\"\").click();"),
-                new Snippet("locator(xpath) → click",
-                        "page.locator(\"xpath=\").click();"),
-                new Snippet("press Enter",
-                        "page.keyboard().press(\"Enter\");"),
-                new Snippet("waitFor",
-                        "page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName(\"\")).waitFor();"),
-                new Snippet("assert visible",
-                        "assertThat(page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName(\"\"))).isVisible();"),
-                new Snippet("assert text",
-                        "assertThat(page.getByText(\"\")).hasText(\"\");"),
-                new Snippet("filter visible",
-                        "page.locator(\"\").filter(new Locator.FilterOptions().setVisible(true)).click();"),
-                new Snippet("right click",
-                        "page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName(\"\"))"
-                                + ".click(new Locator.ClickOptions().setButton(MouseButton.RIGHT));")
-        );
+        if (cached.isEmpty()) {
+            reload();
+        }
+        return cached;
     }
 
     static void insert(JTextComponent editor, Snippet snippet) {
@@ -60,7 +48,6 @@ final class PlaywrightSnippetCatalog {
             int end = Math.max(editor.getSelectionStart(), editor.getSelectionEnd());
             String code = snippet.code();
 
-            // Keep surrounding indent when inserting on an empty/whitespace line.
             String indent = leadingIndent(editor, start);
             String indented = applyIndent(code, indent);
 
@@ -69,7 +56,6 @@ final class PlaywrightSnippetCatalog {
             }
             document.insertString(start, indented, null);
             int caret = start + indented.length();
-            // Place caret inside the first empty string literal if present.
             int emptyString = indented.indexOf("\"\"");
             if (emptyString >= 0) {
                 caret = start + emptyString + 1;
@@ -103,7 +89,6 @@ final class PlaywrightSnippetCatalog {
                     break;
                 }
             }
-            // If inserting mid-line with no indent captured, fall back to 8 spaces (method body).
             if (indent.isEmpty() && lineStart == offset) {
                 return "        ";
             }

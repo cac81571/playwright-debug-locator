@@ -20,6 +20,11 @@ public final class AriaHintComment {
             "//\\s*@aria(?:\\s+role=([A-Za-z0-9_-]+))?\\s+name=\"((?:\\\\.|[^\"\\\\])*)\""
     );
 
+    /** Matches optional whitespace plus an {@code // @aria ...} comment. */
+    private static final Pattern COMMENT_WITH_LEADING_SPACE = Pattern.compile(
+            "\\s*" + PATTERN.pattern()
+    );
+
     private static final Pattern ARIA_WITH_ROLE = Pattern.compile(
             "^aria/(.*)\\[role=\"([^\"]+)\"\\]$"
     );
@@ -71,6 +76,14 @@ public final class AriaHintComment {
             return Optional.empty();
         }
         return Optional.of(new AriaHintComment(matcher.group(1), unescapeJava(matcher.group(2))));
+    }
+
+    /** Removes {@code // @aria ...} (and surrounding spaces) from a source line. */
+    public static String stripFrom(String line) {
+        if (line == null || line.isEmpty()) {
+            return line;
+        }
+        return COMMENT_WITH_LEADING_SPACE.matcher(line).replaceAll("").stripTrailing();
     }
 
     /**

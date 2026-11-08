@@ -14,8 +14,19 @@ import java.util.regex.Pattern;
 public final class RecorderIdHint {
 
     private static final Pattern TRAILING_ID_COMMENT = Pattern.compile("//\\s*#([A-Za-z_][\\w-]*)\\s*$");
+    private static final Pattern TRAILING_ID_COMMENT_WITH_SPACE = Pattern.compile(
+            "\\s*" + TRAILING_ID_COMMENT.pattern()
+    );
 
     private RecorderIdHint() {
+    }
+
+    /** Removes trailing {@code // #id} comments (and surrounding spaces) from a source line. */
+    public static String stripTrailingIdComment(String line) {
+        if (line == null || line.isEmpty()) {
+            return line;
+        }
+        return TRAILING_ID_COMMENT_WITH_SPACE.matcher(line).replaceAll("").stripTrailing();
     }
 
     /**

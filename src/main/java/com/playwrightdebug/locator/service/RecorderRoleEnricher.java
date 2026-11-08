@@ -468,11 +468,9 @@ final class RecorderRoleEnricher {
         }
 
         String getByRole = formatGetByRoleCall(receiver, role, hint.name());
-        // Keep leading indentation / trailing comments; only swap the call and refresh @aria.
+        // Swap the call and drop @aria / #id hints (no longer needed after conversion).
         String replacedCall = matcher.replaceFirst(Matcher.quoteReplacement(getByRole));
-        AriaHintComment updatedHint = hint.withRole(role);
-        String replaced = AriaHintComment.PATTERN.matcher(replacedCall)
-                .replaceFirst(Matcher.quoteReplacement(updatedHint.toComment()));
+        String replaced = RecorderIdHint.stripTrailingIdComment(AriaHintComment.stripFrom(replacedCall));
 
         notes.add(method + "(\"" + arg + "\") → getByRole(" + role + ", \"" + hint.name()
                 + "\") (実行時 Role 判定)");

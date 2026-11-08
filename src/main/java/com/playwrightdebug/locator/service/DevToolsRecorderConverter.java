@@ -127,6 +127,10 @@ public final class DevToolsRecorderConverter {
             try {
                 List<String> lines = convertStep(type, step, warnings, i);
                 if (lines.isEmpty()) {
+                    if ("setViewport".equals(type)) {
+                        // intentionally omitted from generated Playwright code
+                        continue;
+                    }
                     warnings.add("steps[" + i + "] (" + type + "): 未対応のためコメント出力");
                     bodyLines.add("// TODO: unsupported step type \"" + type + "\"");
                 } else {
@@ -150,7 +154,7 @@ public final class DevToolsRecorderConverter {
             int stepIndex
     ) {
         return switch (type) {
-            case "setViewport" -> List.of(convertSetViewport(step));
+            case "setViewport" -> List.of(); // intentionally omitted from generated Playwright code
             case "navigate" -> List.of(convertNavigate(step));
             case "click" -> List.of(withLocatorComments(step, warnings, stepIndex,
                     convertClick(step, false)));
@@ -219,12 +223,6 @@ public final class DevToolsRecorderConverter {
             }
         }
         return found == null || found.isBlank() ? Optional.empty() : Optional.of(found);
-    }
-
-    private static String convertSetViewport(Map<?, ?> step) {
-        int width = intValue(step.get("width"), 1280);
-        int height = intValue(step.get("height"), 720);
-        return "page.setViewportSize(%d, %d);".formatted(width, height);
     }
 
     private static String convertNavigate(Map<?, ?> step) {
