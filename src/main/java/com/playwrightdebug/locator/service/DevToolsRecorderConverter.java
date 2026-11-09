@@ -16,15 +16,8 @@ import java.util.regex.Pattern;
  */
 public final class DevToolsRecorderConverter {
 
-    private static final Pattern ARIA_WITH_ROLE = Pattern.compile(
-            "^aria/(.*)\\[role=\"([^\"]+)\"\\]$"
-    );
-
-    private static final Pattern CSS_ID = Pattern.compile("#([A-Za-z_][\\w-]*)");
-    private static final Pattern ATTR_ID = Pattern.compile("\\[id=(['\"])([^'\"]+)\\1\\]");
-
     public ConversionResult convert(String json) {
-        return convert(json, null);
+        throw new IllegalArgumentException("CDP ページ付きの convert(json, page) を使用してください");
     }
 
     /**
@@ -84,11 +77,14 @@ public final class DevToolsRecorderConverter {
     }
 
     /**
-     * @param page unused (kept for call-site compatibility); generation does not require CDP
+     * @param page live CDP page used to read HTML attributes and verify locator candidates
      */
     public ConversionResult convert(String json, Page page) {
         if (json == null || json.isBlank()) {
             throw new IllegalArgumentException("Recorder JSON が空です");
+        }
+        if (page == null) {
+            throw new IllegalArgumentException("CDP ページが必要です（接続してページを選択してください）");
         }
 
         Object parsed;
@@ -111,7 +107,10 @@ public final class DevToolsRecorderConverter {
         String methodName = "recordedFlow";
         List<String> warnings = new ArrayList<>();
         List<String> bodyLines = new ArrayList<>();
-        warnings.add("生成方針: CSS/XPath 本体 + JSON 記載の // @aria のみ（Role 推測なし。判定は実行時）");
+        warnings.add("生成方針: role ARIA → getByLabel → getByText → placeholder → testId → id/CSS/XPath（未使用候補は行末コメント）");
+
+        RecorderLocatorPicker picker = new RecorderLocatorPicker(page);
+        ConversionContext ctx = new ConversionContext(page, picker, warnings);
 
         for (int i = 0; i < steps.size(); i++) {
             Object stepObj = steps.get(i);
@@ -125,10 +124,9 @@ public final class DevToolsRecorderConverter {
                 continue;
             }
             try {
-                List<String> lines = convertStep(type, step, warnings, i);
+                List<String> lines = convertStep(type, step, ctx, i);
                 if (lines.isEmpty()) {
                     if ("setViewport".equals(type)) {
-                        // intentionally omitted from generated Playwright code
                         continue;
                     }
                     warnings.add("steps[" + i + "] (" + type + "): 未対応のためコメント出力");
@@ -147,113 +145,91 @@ public final class DevToolsRecorderConverter {
         return new ConversionResult(code, className, warnings);
     }
 
+    private record ConversionContext(Page page, RecorderLocatorPicker picker, List<String> warnings) {
+    }
+
     private static List<String> convertStep(
             String type,
             Map<?, ?> step,
-            List<String> warnings,
+            ConversionContext ctx,
             int stepIndex
     ) {
         return switch (type) {
-            case "setViewport" -> List.of(); // intentionally omitted from generated Playwright code
-            case "navigate" -> List.of(convertNavigate(step));
-            case "click" -> List.of(withLocatorComments(step, warnings, stepIndex,
-                    convertClick(step, false)));
-            case "doubleClick" -> List.of(withLocatorComments(step, warnings, stepIndex,
-                    convertClick(step, true)));
-            case "change" -> List.of(withLocatorComments(step, warnings, stepIndex,
-                    convertChange(step)));
+            case "setViewport" -> List.of();
+            case "navigate" -> List.of(convertNavigate(step, ctx));
+            case "click" -> List.of(actionWithLocator(step, ctx, false, ".click();",
+                    ".click(new Locator.ClickOptions().setButton(MouseButton.RIGHT));",
+                    ".click(new Locator.ClickOptions().setButton(MouseButton.MIDDLE));"));
+            case "doubleClick" -> List.of(actionWithLocator(step, ctx, true, ".dblclick();",
+                    ".dblclick(new Locator.DblclickOptions().setButton(MouseButton.RIGHT));",
+                    ".dblclick();"));
+            case "change" -> {
+                String value = stringValue(step.get("value"));
+                RecorderLocatorPicker.Pick pick = ctx.picker().pick(step);
+                yield List.of(pick.expression() + ".fill(\"%s\");".formatted(escapeJava(value))
+                        + unusedSuffix(pick));
+            }
             case "keyDown" -> List.of(convertKey(step, true));
             case "keyUp" -> List.of(convertKey(step, false));
-            case "hover" -> List.of(withLocatorComments(step, warnings, stepIndex,
-                    locatorExpression(step) + ".hover();"));
-            case "scroll" -> List.of(withLocatorComments(step, warnings, stepIndex,
-                    convertScroll(step)));
-            case "waitForElement" -> List.of(withLocatorComments(step, warnings, stepIndex,
-                    locatorExpression(step) + ".waitFor();"));
+            case "hover" -> {
+                RecorderLocatorPicker.Pick pick = ctx.picker().pick(step);
+                yield List.of(pick.expression() + ".hover();" + unusedSuffix(pick));
+            }
+            case "scroll" -> List.of(convertScroll(step, ctx));
+            case "waitForElement" -> {
+                RecorderLocatorPicker.Pick pick = ctx.picker().pick(step);
+                yield List.of(pick.expression() + ".waitFor();" + unusedSuffix(pick));
+            }
             case "waitForExpression" -> List.of(convertWaitForExpression(step));
             default -> List.of();
         };
     }
 
-    private static String withLocatorComments(
+    private static String unusedSuffix(RecorderLocatorPicker.Pick pick) {
+        if (pick.unusedComments() == null || pick.unusedComments().isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String comment : pick.unusedComments()) {
+            if (comment != null && !comment.isBlank()) {
+                sb.append(" // ").append(comment);
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String actionWithLocator(
             Map<?, ?> step,
-            List<String> warnings,
-            int stepIndex,
-            String codeLine
+            ConversionContext ctx,
+            boolean doubleClick,
+            String primarySuffix,
+            String rightSuffix,
+            String middleSuffix
     ) {
-        StringBuilder line = new StringBuilder(codeLine);
-        Optional<AriaHintComment> aria = AriaHintComment.fromStep(step);
-        if (aria.isPresent()) {
-            line.append(' ').append(aria.get().toComment());
-            warnings.add("steps[" + stepIndex + "]: " + aria.get().describe()
-                    + (aria.get().hasRole() ? "" : "（role は JSON 未記載 → 実行時判定）"));
+        RecorderLocatorPicker.Pick pick = ctx.picker().pick(step);
+        String button = stringValue(step.get("button")).toLowerCase(Locale.ROOT);
+        String suffix = primarySuffix;
+        if ("secondary".equals(button) || "right".equals(button)) {
+            suffix = rightSuffix;
+        } else if (!doubleClick && ("auxiliary".equals(button) || "middle".equals(button))) {
+            suffix = middleSuffix;
         }
-        extractCssIdHint(step).ifPresent(id -> line.append(" // #").append(id));
-        return line.toString();
+        return pick.expression() + suffix + unusedSuffix(pick);
     }
 
-    /**
-     * Pulls a DOM id hint from CSS / pierce alternatives so strict-mode recovery can match it later.
-     */
-    static Optional<String> extractCssIdHint(Map<?, ?> step) {
-        Object selectorsRaw = step.get("selectors");
-        if (!(selectorsRaw instanceof List<?> alternatives)) {
-            return Optional.empty();
-        }
-        String found = null;
-        for (Object alternative : alternatives) {
-            if (!(alternative instanceof List<?> parts)) {
-                continue;
-            }
-            for (Object partObj : parts) {
-                String part = stringValue(partObj);
-                if (part.startsWith("aria/") || part.startsWith("text/") || part.startsWith("xpath/")) {
-                    continue;
-                }
-                String css = part.startsWith("pierce/") ? part.substring("pierce/".length()) : part;
-                Matcher attr = ATTR_ID.matcher(css);
-                if (attr.find()) {
-                    found = attr.group(2);
-                    continue;
-                }
-                Matcher id = CSS_ID.matcher(css);
-                if (id.find()) {
-                    found = id.group(1);
-                }
-            }
-        }
-        return found == null || found.isBlank() ? Optional.empty() : Optional.of(found);
-    }
-
-    private static String convertNavigate(Map<?, ?> step) {
+    private static String convertNavigate(Map<?, ?> step, ConversionContext ctx) {
         String url = stringValue(step.get("url"));
         if (url.isBlank()) {
             throw new IllegalArgumentException("navigate.url が空です");
         }
-        return "page.navigate(\"%s\");".formatted(escapeJava(url));
-    }
-
-    private static String convertClick(Map<?, ?> step, boolean doubleClick) {
-        String locator = locatorExpression(step);
-        String button = stringValue(step.get("button")).toLowerCase(Locale.ROOT);
-        if (doubleClick) {
-            if ("secondary".equals(button) || "right".equals(button)) {
-                return locator + ".dblclick(new Locator.DblclickOptions().setButton(MouseButton.RIGHT));";
+        if (ctx.page() != null) {
+            try {
+                ctx.page().navigate(url);
+            } catch (Exception ex) {
+                ctx.warnings().add("navigate 実行失敗（生成は継続）: " + ex.getMessage());
             }
-            return locator + ".dblclick();";
         }
-        if ("secondary".equals(button) || "right".equals(button)) {
-            return locator + ".click(new Locator.ClickOptions().setButton(MouseButton.RIGHT));";
-        }
-        if ("auxiliary".equals(button) || "middle".equals(button)) {
-            return locator + ".click(new Locator.ClickOptions().setButton(MouseButton.MIDDLE));";
-        }
-        return locator + ".click();";
-    }
-
-    private static String convertChange(Map<?, ?> step) {
-        String value = stringValue(step.get("value"));
-        return locatorExpression(step) + ".fill(\"%s\");".formatted(escapeJava(value));
+        return "page.navigate(\"%s\");".formatted(escapeJava(url));
     }
 
     private static String convertKey(Map<?, ?> step, boolean down) {
@@ -265,14 +241,16 @@ public final class DevToolsRecorderConverter {
         return "page.keyboard().%s(\"%s\");".formatted(method, escapeJava(key));
     }
 
-    private static String convertScroll(Map<?, ?> step) {
+    private static String convertScroll(Map<?, ?> step, ConversionContext ctx) {
         int x = intValue(step.get("x"), 0);
         int y = intValue(step.get("y"), 0);
         Object selectors = step.get("selectors");
         if (selectors instanceof Collection<?> && !((Collection<?>) selectors).isEmpty()) {
-            return locatorExpression(step)
+            RecorderLocatorPicker.Pick pick = ctx.picker().pick(step);
+            return pick.expression()
                     + ".evaluate(\"el => { el.scrollTop = %d; el.scrollLeft = %d; }\");"
-                    .formatted(y, x);
+                    .formatted(y, x)
+                    + unusedSuffix(pick);
         }
         return "page.mouse().wheel(%d, %d);".formatted(x, y);
     }
@@ -285,143 +263,9 @@ public final class DevToolsRecorderConverter {
         return "page.waitForFunction(\"%s\");".formatted(escapeJava(expression));
     }
 
-    static String locatorExpression(Map<?, ?> step) {
-        Object selectorsRaw = step.get("selectors");
-        if (!(selectorsRaw instanceof List<?> alternatives) || alternatives.isEmpty()) {
-            throw new IllegalArgumentException("selectors がありません");
-        }
-
-        List<?> chosen = chooseStructuralSelector(alternatives);
-        if (chosen.isEmpty()) {
-            throw new IllegalArgumentException("有効な selector がありません");
-        }
-
-        String first = stringValue(chosen.get(0));
-        if (chosen.size() == 1) {
-            return toStructuralLocator("page", first);
-        }
-
-        String expr = "page";
-        for (Object part : chosen) {
-            expr = toStructuralLocator(expr, stringValue(part));
-        }
-        return expr;
-    }
-
-    /**
-     * Prefers CSS (especially with id), then XPath/pierce/text. ARIA is last-resort only.
-     */
-    private static List<?> chooseStructuralSelector(List<?> alternatives) {
-        List<?> fallback = List.of();
-        List<?> cssWithId = null;
-        List<?> cssFallback = null;
-        List<?> textFallback = null;
-        List<?> xpath = null;
-        List<?> pierce = null;
-        List<?> ariaFallback = null;
-
-        for (Object alternative : alternatives) {
-            if (!(alternative instanceof List<?> parts) || parts.isEmpty()) {
-                continue;
-            }
-            if (fallback.isEmpty()) {
-                fallback = parts;
-            }
-            String head = stringValue(parts.get(0));
-            if (head.startsWith("aria/")) {
-                if (ariaFallback == null) {
-                    ariaFallback = parts;
-                }
-            } else if (textFallback == null && head.startsWith("text/")) {
-                textFallback = parts;
-            } else if (xpath == null && head.startsWith("xpath/")) {
-                xpath = parts;
-            } else if (pierce == null && head.startsWith("pierce/")) {
-                pierce = parts;
-            } else if (isCssSelector(head)) {
-                boolean hasId = head.contains("#") || head.contains("[id=") || head.contains("[id =");
-                if (hasId && cssWithId == null) {
-                    cssWithId = parts;
-                } else if (cssFallback == null) {
-                    cssFallback = parts;
-                }
-            }
-        }
-
-        if (cssWithId != null) {
-            return cssWithId;
-        }
-        if (cssFallback != null) {
-            return cssFallback;
-        }
-        if (xpath != null) {
-            return xpath;
-        }
-        if (pierce != null) {
-            return pierce;
-        }
-        if (textFallback != null) {
-            return textFallback;
-        }
-        if (ariaFallback != null) {
-            return ariaFallback;
-        }
-        return fallback;
-    }
-
-    private static String toStructuralLocator(String receiver, String selector) {
-        if (selector.startsWith("text/")) {
-            String text = selector.substring("text/".length());
-            return receiver + ".getByText(\"%s\")".formatted(escapeJava(text));
-        }
-        if (selector.startsWith("aria/")) {
-            // Last resort when Recorder has no CSS/XPath alternative.
-            Matcher withRole = ARIA_WITH_ROLE.matcher(selector);
-            if (withRole.matches()) {
-                return formatGetByRole(receiver, withRole.group(2), withRole.group(1));
-            }
-            String name = selector.substring("aria/".length());
-            return "%s.getByLabel(\"%s\")".formatted(receiver, escapeJava(name));
-        }
-        if (selector.startsWith("xpath/")) {
-            String xpath = selector.substring("xpath/".length());
-            return receiver + ".locator(\"xpath=%s\")".formatted(escapeJava(xpath));
-        }
-        if (selector.startsWith("pierce/")) {
-            String css = selector.substring("pierce/".length());
-            return receiver + ".locator(\"%s\")".formatted(escapeJava(css));
-        }
-        return receiver + ".locator(\"%s\")".formatted(escapeJava(selector));
-    }
-
-    private static String formatGetByRole(String receiver, String role, String name) {
-        String optionsType = "page".equals(receiver)
-                ? "Page.GetByRoleOptions"
-                : "Locator.GetByRoleOptions";
-        return "%s.getByRole(%s, new %s().setName(\"%s\").setExact(true))".formatted(
-                receiver,
-                toAriaRoleEnum(role),
-                optionsType,
-                escapeJava(name)
-        );
-    }
-
     static String toAriaRoleEnum(String role) {
         String normalized = role.trim().toLowerCase(Locale.ROOT).replace('-', '_');
         return "AriaRole." + normalized.toUpperCase(Locale.ROOT);
-    }
-
-    private static boolean isCssSelector(String selector) {
-        if (selector == null || selector.isBlank()) {
-            return false;
-        }
-        if (selector.startsWith("aria/")
-                || selector.startsWith("text/")
-                || selector.startsWith("xpath/")
-                || selector.startsWith("pierce/")) {
-            return false;
-        }
-        return true;
     }
 
     private static String buildJavaSource(

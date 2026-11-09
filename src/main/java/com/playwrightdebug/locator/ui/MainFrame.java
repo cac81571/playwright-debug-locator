@@ -5,7 +5,6 @@ import com.playwrightdebug.locator.model.LocatorTestResult;
 import com.playwrightdebug.locator.model.PageInfo;
 import com.playwrightdebug.locator.model.PlaywrightScriptContext;
 import com.playwrightdebug.locator.service.DevToolsRecorderConverter;
-import com.playwrightdebug.locator.service.LiveJavaRoleEnricher;
 import com.playwrightdebug.locator.service.LocatorTestService;
 import com.playwrightdebug.locator.service.PlaywrightCodegenService;
 import com.playwrightdebug.locator.service.PlaywrightSession;
@@ -86,11 +85,10 @@ public final class MainFrame extends JFrame {
     private final JButton refreshPagesButton = new JButton("ページ更新");
     private final JButton codegenButton = new JButton("Codegen");
     private final JButton recorderGenerateButton = createActionButton("Playwrightコード生成", this::generateRecorderJunit);
-    private final JButton recorderAriaConvertButton = createActionButton("ARIA 変換", this::convertRecorderAria);
     private final JButton recorderPlaywrightRunButton = createActionButton("Playwright 実行", this::runRecorderPlaywright);
     private final JButton recorderSnippetButton = createActionButton("スニペット", this::showRecorderSnippetMenu);
     private final JButton recorderCopyButton = createActionButton("コピー", this::copyRecorderJava);
-    private final JLabel recorderAriaStatusLabel = new JLabel();
+    private final JLabel recorderGenerateStatusLabel = new JLabel();
     private final JLabel recorderRunErrorLabel = new JLabel();
 
     private final JComboBox<PageInfo> pageComboBox = new JComboBox<>();
@@ -329,8 +327,8 @@ public final class MainFrame extends JFrame {
     }
 
     private JPanel createRecorderJsonActionPanel() {
-        recorderAriaStatusLabel.setFont(recorderAriaStatusLabel.getFont().deriveFont(Font.BOLD));
-        clearRecorderAriaStatus();
+        recorderGenerateStatusLabel.setFont(recorderGenerateStatusLabel.getFont().deriveFont(Font.BOLD));
+        clearRecorderGenerateStatus();
 
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
@@ -340,8 +338,7 @@ public final class MainFrame extends JFrame {
         actions.setAlignmentX(Component.LEFT_ALIGNMENT);
         actions.add(createActionButton("JSON を開く", this::openRecorderJsonFile));
         actions.add(recorderGenerateButton);
-        actions.add(recorderAriaConvertButton);
-        actions.add(recorderAriaStatusLabel);
+        actions.add(recorderGenerateStatusLabel);
         panel.add(actions);
         return panel;
     }
@@ -375,15 +372,15 @@ public final class MainFrame extends JFrame {
         return panel;
     }
 
-    private void showRecorderAriaStatus(String text, Color color) {
-        recorderAriaStatusLabel.setForeground(color);
-        recorderAriaStatusLabel.setText(text);
-        recorderAriaStatusLabel.setVisible(true);
+    private void showRecorderGenerateStatus(String text, Color color) {
+        recorderGenerateStatusLabel.setForeground(color);
+        recorderGenerateStatusLabel.setText(text);
+        recorderGenerateStatusLabel.setVisible(true);
     }
 
-    private void clearRecorderAriaStatus() {
-        recorderAriaStatusLabel.setText(" ");
-        recorderAriaStatusLabel.setVisible(false);
+    private void clearRecorderGenerateStatus() {
+        recorderGenerateStatusLabel.setText(" ");
+        recorderGenerateStatusLabel.setVisible(false);
     }
 
     private void showRecorderRunError() {
@@ -611,12 +608,48 @@ public final class MainFrame extends JFrame {
             appendLog("生成する Recorder JSON がありません");
             return;
         }
-        try {
-            DevToolsRecorderConverter.ConversionResult result = recorderConverter.convert(json);
-            applyGeneratedRecorderResult(result);
-        } catch (Exception ex) {
-            appendLog("Playwrightコード生成失敗: " + ex.getMessage());
+        if (!session.isConnected()) {
+            appendLog("先に CDP 接続してください");
+            return;
         }
+        PageInfo selected = (PageInfo) pageComboBox.getSelectedItem();
+        if (selected == null) {
+            appendLog("ページを選択してください");
+            return;
+        }
+
+        double timeout = timeoutMs();
+        long hardTimeoutMs = Math.max(15_000L, (long) timeout * 5 + 5_000L);
+        setBusy(true);
+        clearRecorderGenerateStatus();
+        appendLog("Playwrightコード生成中（CDP/HTML 参照）...");
+        uiExecutor.submit(() -> {
+            try {
+                DevToolsRecorderConverter.ConversionResult result = session.run(() -> {
+                    Page page = session.requirePage(selected);
+                    page.setDefaultTimeout(timeout);
+                    page.setDefaultNavigationTimeout(timeout);
+                    page.context().setDefaultTimeout(timeout);
+                    page.context().setDefaultNavigationTimeout(timeout);
+                    return recorderConverter.convert(json, page);
+                }, hardTimeoutMs);
+                SwingUtilities.invokeLater(() -> {
+                    applyGeneratedRecorderResult(result);
+                    showRecorderGenerateStatus("生成完了", new Color(0, 140, 40));
+                    setBusy(false);
+                });
+            } catch (Exception ex) {
+                SwingUtilities.invokeLater(() -> {
+                    updateConnectionState(session.isConnected());
+                    showRecorderGenerateStatus("生成失敗", new Color(200, 0, 0));
+                    appendLog("Playwrightコード生成失敗: " + ex.getMessage());
+                    if (!session.isConnected()) {
+                        pageComboBox.setModel(new DefaultComboBoxModel<>());
+                    }
+                    setBusy(false);
+                });
+            }
+        });
     }
 
     private void applyGeneratedRecorderResult(DevToolsRecorderConverter.ConversionResult result) {
@@ -639,71 +672,6 @@ public final class MainFrame extends JFrame {
         }
         Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
         appendLog("生成コードをクリップボードにコピーしました");
-    }
-
-    private void convertRecorderAria() {
-        String javaSource = recorderJavaArea.getText();
-        if (javaSource == null || javaSource.isBlank()) {
-            appendLog("ARIA 変換する Playwright コードがありません。先に Playwrightコード生成してください");
-            return;
-        }
-        if (!session.isConnected()) {
-            appendLog("先に CDP 接続してください");
-            return;
-        }
-        PageInfo selected = (PageInfo) pageComboBox.getSelectedItem();
-        if (selected == null) {
-            appendLog("ページを選択してください");
-            return;
-        }
-
-        double timeout = timeoutMs();
-        long hardTimeoutMs = Math.max(5_000L, (long) timeout + 3_000L);
-        setBusy(true);
-        clearRecorderAriaStatus();
-        appendLog("ARIA 変換中...");
-        uiExecutor.submit(() -> {
-            try {
-                LiveJavaRoleEnricher.Result enriched = session.run(() -> {
-                    Page page = session.requirePage(selected);
-                    page.setDefaultTimeout(timeout);
-                    page.setDefaultNavigationTimeout(timeout);
-                    page.context().setDefaultTimeout(timeout);
-                    page.context().setDefaultNavigationTimeout(timeout);
-                    return LiveJavaRoleEnricher.enrich(page, javaSource);
-                }, hardTimeoutMs);
-                SwingUtilities.invokeLater(() -> {
-                    if (enriched.replacements() > 0) {
-                        int caret = recorderJavaArea.getCaretPosition();
-                        recorderJavaArea.setText(enriched.source());
-                        int max = recorderJavaArea.getDocument().getLength();
-                        recorderJavaArea.setCaretPosition(Math.max(0, Math.min(caret, max)));
-                        showRecorderAriaStatus(enriched.replacements() + " 箇所変換", new Color(0, 140, 40));
-                        appendLog("ARIA 変換: " + enriched.replacements()
-                                + " 箇所を @aria コメントから getByRole に更新");
-                    } else {
-                        showRecorderAriaStatus("変換なし", new Color(120, 120, 120));
-                        appendLog("ARIA 変換: 置換対象はありませんでした");
-                    }
-                    if (enriched.notes() != null) {
-                        for (String note : enriched.notes()) {
-                            appendLog("  - " + note);
-                        }
-                    }
-                    setBusy(false);
-                });
-            } catch (Exception ex) {
-                SwingUtilities.invokeLater(() -> {
-                    updateConnectionState(session.isConnected());
-                    showRecorderAriaStatus("変換失敗", new Color(200, 0, 0));
-                    appendLog("ARIA 変換失敗: " + ex.getMessage());
-                    if (!session.isConnected()) {
-                        pageComboBox.setModel(new DefaultComboBoxModel<>());
-                    }
-                    setBusy(false);
-                });
-            }
-        });
     }
 
     private void runRecorderPlaywright() {
@@ -957,8 +925,7 @@ public final class MainFrame extends JFrame {
         connectButton.setEnabled(!connected);
         disconnectButton.setEnabled(connected);
         refreshPagesButton.setEnabled(connected);
-        recorderGenerateButton.setEnabled(true);
-        recorderAriaConvertButton.setEnabled(connected);
+        recorderGenerateButton.setEnabled(connected);
         recorderPlaywrightRunButton.setEnabled(connected);
         pageComboBox.setEnabled(connected);
         portCombo.setEnabled(!connected);
@@ -1036,8 +1003,7 @@ public final class MainFrame extends JFrame {
         connectButton.setEnabled(!busy && !session.isConnected());
         disconnectButton.setEnabled(!busy && session.isConnected());
         refreshPagesButton.setEnabled(!busy && session.isConnected());
-        recorderGenerateButton.setEnabled(!busy);
-        recorderAriaConvertButton.setEnabled(!busy && session.isConnected());
+        recorderGenerateButton.setEnabled(!busy && session.isConnected());
         recorderPlaywrightRunButton.setEnabled(!busy && session.isConnected());
     }
 }
