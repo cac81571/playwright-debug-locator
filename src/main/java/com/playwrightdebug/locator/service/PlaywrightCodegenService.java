@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public final class PlaywrightCodegenService {
 
-    private static final String TARGET = "java";
+    private static final String TARGET = "java-junit";
     private static final String CHANNEL = "msedge";
 
     private final AtomicReference<Process> processRef = new AtomicReference<>();
@@ -27,7 +27,10 @@ public final class PlaywrightCodegenService {
         destroyProcess(process);
     }
 
-    public void launch(String url) throws IOException {
+    /**
+     * Launches Playwright codegen and returns the full command line that was started.
+     */
+    public String launch(String url) throws IOException {
         if (isRunning()) {
             stop();
         }
@@ -43,6 +46,7 @@ public final class PlaywrightCodegenService {
             processBuilder.environment().put("PW_CLI_DISPLAY_VERSION", version);
         }
 
+        String commandLine = formatCommand(processBuilder.command());
         Process process = processBuilder.start();
         processRef.set(process);
 
@@ -57,6 +61,25 @@ public final class PlaywrightCodegenService {
         }, "codegen-monitor");
         monitor.setDaemon(true);
         monitor.start();
+        return commandLine;
+    }
+
+    private static String formatCommand(List<String> command) {
+        StringBuilder sb = new StringBuilder();
+        for (String part : command) {
+            if (sb.length() > 0) {
+                sb.append(' ');
+            }
+            sb.append(quoteIfNeeded(part));
+        }
+        return sb.toString();
+    }
+
+    private static String quoteIfNeeded(String value) {
+        if (value.isEmpty() || value.indexOf(' ') >= 0 || value.indexOf('\t') >= 0) {
+            return '"' + value.replace("\"", "\\\"") + '"';
+        }
+        return value;
     }
 
     private static void destroyProcess(Process process) {

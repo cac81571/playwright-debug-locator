@@ -82,12 +82,13 @@ public final class MainFrame extends JFrame {
     private final JTextField browserLaunchOptionField = new JTextField(26);
     private final JButton connectButton = new JButton("接続");
     private final JButton disconnectButton = new JButton("切断");
-    private final JButton refreshPagesButton = new JButton("ページ更新");
-    private final JButton codegenButton = new JButton("Codegen");
-    private final JButton recorderGenerateButton = createActionButton("Playwrightコード生成", this::generateRecorderJunit);
+    private final JButton refreshPagesButton = new JButton("タブリスト更新");
+    private final JButton codegenButton = new JButton("Codegen 起動");
+    private final JComboBox<String> codegenUrlCombo = createCodegenUrlCombo();
+    private final JButton recorderGenerateButton = createActionButton("Playwrightコード変換", this::generateRecorderJunit);
     private final JButton recorderPlaywrightRunButton = createActionButton("Playwright 実行", this::runRecorderPlaywright);
     private final JButton recorderSnippetButton = createActionButton("スニペット", this::showRecorderSnippetMenu);
-    private final JButton recorderCopyButton = createActionButton("コピー", this::copyRecorderJava);
+    private final JButton recorderClearButton = createActionButton("クリア", this::clearRecorderJavaToSample);
     private final JLabel recorderGenerateStatusLabel = new JLabel();
     private final JLabel recorderRunErrorLabel = new JLabel();
 
@@ -95,8 +96,10 @@ public final class MainFrame extends JFrame {
     private final JSpinner connectTimeoutSpinner = new JSpinner(new SpinnerNumberModel(3000, 500, 120000, 500));
     private final JSpinner timeoutSpinner = new JSpinner(new SpinnerNumberModel(3000, 500, 120000, 500));
 
-    private final RSyntaxTextArea recorderJsonArea = CodeEditorFactory.createJsonEditor("");
-    private final RSyntaxTextArea recorderJavaArea = CodeEditorFactory.createJavaEditor("");
+    private final RSyntaxTextArea recorderJsonArea = CodeEditorFactory.createJsonEditor(
+            PlaywrightWorkspaceStore.loadJson());
+    private final RSyntaxTextArea recorderJavaArea = CodeEditorFactory.createJavaEditor(
+            PlaywrightWorkspaceStore.loadJava());
     private final JTextArea completionsCatalogArea = new JTextArea(AssistCatalogStore.loadCompletionsText(), 18, 40);
     private final JTextArea snippetsCatalogArea = new JTextArea(AssistCatalogStore.loadSnippetsText(), 18, 40);
 
@@ -109,7 +112,7 @@ public final class MainFrame extends JFrame {
     private static final Color STRICT_MODE_LINE_HIGHLIGHT = new Color(255, 192, 203);
 
     public MainFrame() {
-        super("Playwright Debug Locator");
+        super("Playwright Coder");
         Font editorFont = new Font(Font.MONOSPACED, Font.PLAIN, 13);
         logArea.setFont(editorFont);
         completionsCatalogArea.setFont(editorFont);
@@ -134,7 +137,7 @@ public final class MainFrame extends JFrame {
     }
 
     private JPanel createConnectionPanel() {
-        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        JPanel panel = new JPanel(new BorderLayout(0, 4));
         panel.setBorder(BorderFactory.createTitledBorder("CDP 接続"));
 
         browserLaunchOptionField.setEditable(false);
@@ -144,23 +147,105 @@ public final class MainFrame extends JFrame {
 
         statusLabel.setFont(statusLabel.getFont().deriveFont(Font.BOLD));
 
-        panel.add(statusLabel);
-        panel.add(new JLabel("ポート"));
-        panel.add(portCombo);
-        panel.add(new JLabel("起動オプション"));
-        panel.add(browserLaunchOptionField);
-        panel.add(new JLabel("接続 Timeout (ms)"));
-        panel.add(connectTimeoutSpinner);
-        panel.add(connectButton);
-        panel.add(disconnectButton);
-        panel.add(codegenButton);
+        JPanel connectLeft = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        connectLeft.add(statusLabel);
+        connectLeft.add(new JLabel("ポート"));
+        connectLeft.add(portCombo);
+        connectLeft.add(new JLabel("ブラウザ起動オプション"));
+
+        JPanel connectRight = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 4));
+        connectRight.add(new JLabel("接続 Timeout (ms)"));
+        connectRight.add(connectTimeoutSpinner);
+        connectRight.add(connectButton);
+        connectRight.add(disconnectButton);
+
+        JPanel connectRow = new JPanel(new GridBagLayout());
+        GridBagConstraints connectGc = new GridBagConstraints();
+        connectGc.gridy = 0;
+        connectGc.anchor = GridBagConstraints.WEST;
+        connectGc.fill = GridBagConstraints.HORIZONTAL;
+
+        connectGc.gridx = 0;
+        connectGc.weightx = 0;
+        connectRow.add(connectLeft, connectGc);
+
+        connectGc.gridx = 1;
+        connectGc.weightx = 1;
+        connectGc.insets = new Insets(4, 0, 4, 0);
+        connectRow.add(browserLaunchOptionField, connectGc);
+
+        connectGc.gridx = 2;
+        connectGc.weightx = 0;
+        connectGc.insets = new Insets(0, 0, 0, 0);
+        connectRow.add(connectRight, connectGc);
+
+        JPanel tabRow = new JPanel(new GridBagLayout());
+        GridBagConstraints gc = new GridBagConstraints();
+        gc.insets = new Insets(4, 8, 4, 4);
+        gc.anchor = GridBagConstraints.WEST;
+        gc.fill = GridBagConstraints.HORIZONTAL;
+
+        gc.gridx = 0;
+        gc.weightx = 0;
+        tabRow.add(new JLabel("タブ選択"), gc);
+
+        gc.gridx = 1;
+        gc.weightx = 1;
+        pageComboBox.setPrototypeDisplayValue(new PageInfo("", "Sample page title", "https://example.com", null));
+        tabRow.add(pageComboBox, gc);
+
+        gc.gridx = 2;
+        gc.weightx = 0;
+        gc.insets = new Insets(4, 8, 4, 4);
+        tabRow.add(new JLabel("操作 Timeout (ms)"), gc);
+
+        gc.gridx = 3;
+        gc.insets = new Insets(4, 4, 4, 4);
+        tabRow.add(timeoutSpinner, gc);
+
+        gc.gridx = 4;
+        gc.insets = new Insets(4, 4, 4, 8);
+        tabRow.add(refreshPagesButton, gc);
+
+        panel.add(connectRow, BorderLayout.NORTH);
+        panel.add(tabRow, BorderLayout.CENTER);
+        return panel;
+    }
+
+    private JPanel createCodegenTabPanel() {
+        JPanel group = new JPanel(new BorderLayout(8, 0));
+        group.setBorder(BorderFactory.createTitledBorder("Codegen"));
+
+        JPanel left = new JPanel(new GridBagLayout());
+        GridBagConstraints gc = new GridBagConstraints();
+        gc.insets = new Insets(4, 8, 4, 4);
+        gc.anchor = GridBagConstraints.WEST;
+        gc.fill = GridBagConstraints.HORIZONTAL;
+
+        gc.gridx = 0;
+        gc.weightx = 0;
+        left.add(new JLabel("初期表示 URL"), gc);
+
+        gc.gridx = 1;
+        gc.weightx = 1;
+        left.add(codegenUrlCombo, gc);
+
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 4));
+        right.add(codegenButton);
+
+        group.add(left, BorderLayout.CENTER);
+        group.add(right, BorderLayout.EAST);
+
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        panel.add(group, BorderLayout.NORTH);
         return panel;
     }
 
     private JSplitPane createMainSplitPane() {
         JPanel workspace = new JPanel(new BorderLayout(8, 8));
-        workspace.add(createSharedOptionsPanel(), BorderLayout.NORTH);
-        workspaceTabs.addTab("Recorder", createRecorderConversionPanel());
+        workspaceTabs.addTab("Playwright", createRecorderConversionPanel());
+        workspaceTabs.addTab("Codegen", createCodegenTabPanel());
         workspaceTabs.addTab("補完", createCompletionsCatalogPanel());
         workspaceTabs.addTab("スニペット", createSnippetsCatalogPanel());
         workspace.add(workspaceTabs, BorderLayout.CENTER);
@@ -184,38 +269,6 @@ public final class MainFrame extends JFrame {
         splitPane.setBorder(null);
         splitPane.setDividerLocation(0.62);
         return splitPane;
-    }
-
-    private JPanel createSharedOptionsPanel() {
-        JPanel panel = new JPanel(new GridBagLayout());
-        GridBagConstraints gc = new GridBagConstraints();
-        gc.insets = new Insets(4, 4, 4, 4);
-        gc.anchor = GridBagConstraints.WEST;
-        gc.fill = GridBagConstraints.HORIZONTAL;
-
-        gc.gridx = 0;
-        gc.gridy = 0;
-        gc.weightx = 0;
-        panel.add(new JLabel("ページ"), gc);
-
-        gc.gridx = 1;
-        gc.weightx = 1;
-        pageComboBox.setPrototypeDisplayValue(new PageInfo("", "Sample page title", "https://example.com", null));
-        panel.add(pageComboBox, gc);
-
-        gc.gridx = 2;
-        gc.weightx = 0;
-        panel.add(refreshPagesButton, gc);
-
-        gc.gridx = 3;
-        gc.weightx = 0;
-        panel.add(new JLabel("操作 Timeout (ms)"), gc);
-
-        gc.gridx = 4;
-        gc.weightx = 0;
-        panel.add(timeoutSpinner, gc);
-
-        return panel;
     }
 
     private static final int ACTION_TOP_GAP = 10;
@@ -282,7 +335,7 @@ public final class MainFrame extends JFrame {
         jsonScroll.setBorder(BorderFactory.createTitledBorder("DevTools Recorder JSON"));
 
         RTextScrollPane javaScroll = CodeEditorFactory.wrapWithLineNumbers(recorderJavaArea);
-        javaScroll.setBorder(BorderFactory.createTitledBorder("Playwright JUnit (Java)"));
+        javaScroll.setBorder(BorderFactory.createTitledBorder("Playwright (Java)"));
 
         JPanel jsonSide = new JPanel(new BorderLayout(0, 0));
         jsonSide.add(jsonScroll, BorderLayout.CENTER);
@@ -334,12 +387,19 @@ public final class MainFrame extends JFrame {
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.add(Box.createVerticalStrut(ACTION_TOP_GAP));
 
-        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        actions.setAlignmentX(Component.LEFT_ALIGNMENT);
-        actions.add(createActionButton("JSON を開く", this::openRecorderJsonFile));
-        actions.add(recorderGenerateButton);
-        actions.add(recorderGenerateStatusLabel);
-        panel.add(actions);
+        JPanel row = new JPanel(new BorderLayout(8, 0));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        left.add(createActionButton("JSON を開く", this::openRecorderJsonFile));
+
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        right.add(recorderGenerateStatusLabel);
+        right.add(recorderGenerateButton);
+
+        row.add(left, BorderLayout.WEST);
+        row.add(right, BorderLayout.EAST);
+        panel.add(row);
         return panel;
     }
 
@@ -356,20 +416,28 @@ public final class MainFrame extends JFrame {
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        left.add(recorderPlaywrightRunButton);
-        left.add(recorderRunErrorLabel);
+        left.add(recorderClearButton);
 
         JPanel center = new JPanel(new FlowLayout(FlowLayout.CENTER, 6, 0));
         center.add(recorderSnippetButton);
 
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
-        right.add(recorderCopyButton);
+        right.add(recorderRunErrorLabel);
+        right.add(recorderPlaywrightRunButton);
 
         row.add(left, BorderLayout.WEST);
         row.add(center, BorderLayout.CENTER);
         row.add(right, BorderLayout.EAST);
         panel.add(row);
         return panel;
+    }
+
+    private void clearRecorderJavaToSample() {
+        clearStrictModeState();
+        clearRecorderRunError();
+        recorderJavaArea.setText(PlaywrightWorkspaceStore.defaultJavaText());
+        recorderJavaArea.setCaretPosition(0);
+        appendLog("Playwright コードをサンプルに戻しました");
     }
 
     private void showRecorderGenerateStatus(String text, Color color) {
@@ -417,7 +485,7 @@ public final class MainFrame extends JFrame {
 
         JScrollPane logScroll = new JScrollPane(logArea);
         JButton clearLogButton = createActionButton("クリア", this::clearResultLog);
-        JPanel logButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        JPanel logButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         logButtons.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
         logButtons.add(clearLogButton);
 
@@ -477,6 +545,7 @@ public final class MainFrame extends JFrame {
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosing(java.awt.event.WindowEvent e) {
+                PlaywrightWorkspaceStore.save(recorderJsonArea.getText(), recorderJavaArea.getText());
                 session.close();
                 codegenService.stop();
                 uiExecutor.shutdownNow();
@@ -560,26 +629,34 @@ public final class MainFrame extends JFrame {
                     setPageItems(pages);
                     appendLog("ページ一覧を更新しました (" + pages.size() + " 件)");
                     setBusy(false);
+                    pageComboBox.requestFocusInWindow();
                 });
             } catch (Exception ex) {
                 SwingUtilities.invokeLater(() -> {
                     appendLog("ページ更新失敗: " + ex.getMessage());
                     setBusy(false);
+                    pageComboBox.requestFocusInWindow();
                 });
             }
         });
     }
 
     private void launchCodegen() {
+        String url = codegenUrlText();
+        rememberCodegenUrl(url);
         boolean restarting = codegenService.isRunning();
+        String target = url.isBlank() ? "空のページ" : url;
         appendLog(restarting
-                ? "Codegen 再起動中 (msedge): 空のページ"
-                : "Codegen 起動中 (msedge): 空のページ");
+                ? "Codegen 再起動中 (msedge): " + target
+                : "Codegen 起動中 (msedge): " + target);
+        final String launchUrl = url.isBlank() ? null : url;
         uiExecutor.submit(() -> {
             try {
-                codegenService.launch(null);
-                SwingUtilities.invokeLater(() ->
-                        appendLog("Codegen を起動しました（Edge / Playwright Inspector）"));
+                String command = codegenService.launch(launchUrl);
+                SwingUtilities.invokeLater(() -> {
+                    appendLog("Codegen 起動コマンド: " + command);
+                    appendLog("Codegen を起動しました（Edge / Playwright Inspector）");
+                });
             } catch (Exception ex) {
                 SwingUtilities.invokeLater(() -> appendLog("Codegen 起動失敗: " + ex.getMessage()));
             }
@@ -664,16 +741,6 @@ public final class MainFrame extends JFrame {
         }
     }
 
-    private void copyRecorderJava() {
-        String text = recorderJavaArea.getText();
-        if (text == null || text.isBlank()) {
-            appendLog("コピーする生成コードがありません");
-            return;
-        }
-        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
-        appendLog("生成コードをクリップボードにコピーしました");
-    }
-
     private void runRecorderPlaywright() {
         String javaSource = recorderJavaArea.getText();
         if (javaSource == null || javaSource.isBlank()) {
@@ -702,7 +769,7 @@ public final class MainFrame extends JFrame {
         setBusy(true);
         clearRecorderRunError();
         clearStrictModeState();
-        appendLog("Recorder Playwright を実行中... (ARIA 変換なし / hard timeout " + hardTimeoutMs + " ms)");
+        appendLog("Playwright を実行中... (ARIA 変換なし / hard timeout " + hardTimeoutMs + " ms)");
         uiExecutor.submit(() -> {
             try {
                 LocatorTestResult result = session.run(() -> {
@@ -944,6 +1011,37 @@ public final class MainFrame extends JFrame {
         combo.setSelectedItem(PortHistoryStore.lastPort());
         combo.setPrototypeDisplayValue("65535");
         return combo;
+    }
+
+    private static JComboBox<String> createCodegenUrlCombo() {
+        DefaultComboBoxModel<String> model = new DefaultComboBoxModel<>();
+        for (String url : CodegenUrlHistoryStore.load()) {
+            model.addElement(url);
+        }
+        JComboBox<String> combo = new JComboBox<>(model);
+        combo.setEditable(true);
+        combo.setSelectedItem(CodegenUrlHistoryStore.lastUrl());
+        combo.setPrototypeDisplayValue("https://example.com/path");
+        return combo;
+    }
+
+    private String codegenUrlText() {
+        Object item = codegenUrlCombo.getEditor().getItem();
+        if (item == null) {
+            item = codegenUrlCombo.getSelectedItem();
+        }
+        return item == null ? "" : item.toString().trim();
+    }
+
+    private void rememberCodegenUrl(String url) {
+        List<String> history = CodegenUrlHistoryStore.remember(url);
+        String current = url == null ? "" : url.trim();
+        DefaultComboBoxModel<String> model = new DefaultComboBoxModel<>();
+        for (String entry : history) {
+            model.addElement(entry);
+        }
+        codegenUrlCombo.setModel(model);
+        codegenUrlCombo.setSelectedItem(current);
     }
 
     private JTextField portComboEditor() {

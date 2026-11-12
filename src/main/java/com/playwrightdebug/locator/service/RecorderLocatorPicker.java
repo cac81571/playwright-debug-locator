@@ -45,13 +45,22 @@ final class RecorderLocatorPicker {
             }
             StringBuilder sb = new StringBuilder(expression);
             for (String comment : unusedComments) {
-                if (comment == null || comment.isBlank()) {
+                String singleLine = toSingleLineComment(comment);
+                if (singleLine.isEmpty()) {
                     continue;
                 }
-                sb.append(" // ").append(comment);
+                sb.append(" // ").append(singleLine);
             }
             return sb.toString();
         }
+    }
+
+    /** Flattens text so it is safe inside a {@code //} line comment. */
+    static String toSingleLineComment(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        return text.replace('\r', ' ').replace('\n', ' ').replaceAll(" +", " ").trim();
     }
 
     enum Kind {

@@ -191,8 +191,9 @@ public final class DevToolsRecorderConverter {
         }
         StringBuilder sb = new StringBuilder();
         for (String comment : pick.unusedComments()) {
-            if (comment != null && !comment.isBlank()) {
-                sb.append(" // ").append(comment);
+            String singleLine = RecorderLocatorPicker.toSingleLineComment(comment);
+            if (!singleLine.isEmpty()) {
+                sb.append(" // ").append(singleLine);
             }
         }
         return sb.toString();

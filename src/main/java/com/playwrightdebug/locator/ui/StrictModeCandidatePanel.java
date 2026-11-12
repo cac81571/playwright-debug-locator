@@ -100,9 +100,13 @@ public final class StrictModeCandidatePanel extends JPanel {
         JScrollPane previewScroll = new JScrollPane(previewArea);
         previewScroll.setBorder(BorderFactory.createTitledBorder("選択中の locator"));
 
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        buttons.add(applyButton);
-        buttons.add(clearButton);
+        JPanel buttons = new JPanel(new BorderLayout());
+        JPanel applyButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        applyButtons.add(applyButton);
+        JPanel clearButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        clearButtons.add(clearButton);
+        buttons.add(applyButtons, BorderLayout.WEST);
+        buttons.add(clearButtons, BorderLayout.EAST);
 
         add(north, BorderLayout.NORTH);
         add(previewScroll, BorderLayout.CENTER);
