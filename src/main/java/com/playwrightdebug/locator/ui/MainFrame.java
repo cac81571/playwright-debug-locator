@@ -22,6 +22,7 @@ import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
@@ -30,11 +31,16 @@ import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.JTree;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 import javax.swing.WindowConstants;
 import javax.swing.filechooser.FileNameExtensionFilter;
+import javax.swing.tree.DefaultMutableTreeNode;
+import javax.swing.tree.DefaultTreeModel;
+import javax.swing.tree.TreePath;
+import javax.swing.tree.TreeSelectionModel;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -46,6 +52,8 @@ import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.JTextComponent;
 import javax.swing.Box;
@@ -89,8 +97,15 @@ public final class MainFrame extends JFrame {
     private final JButton recorderPlaywrightRunButton = createActionButton("Playwright 実行", this::runRecorderPlaywright);
     private final JButton recorderSnippetButton = createActionButton("スニペット", this::showRecorderSnippetMenu);
     private final JButton recorderClearButton = createActionButton("クリア", this::clearRecorderJavaToSample);
+    private final JButton scriptLoadButton = createActionButton("読込", this::loadScriptFromLibrary);
+    private final JButton scriptSaveButton = createActionButton("保存", this::saveScriptToLibrary);
+    private final JButton scriptDeleteButton = createActionButton("削除", this::deleteScriptFromLibrary);
+    private final JButton scriptNewFolderButton = createActionButton("フォルダ作成", this::createScriptFolder);
+    private final JTextField scriptFilterField = new JTextField();
+    private final JTree scriptTree = new JTree();
     private final JLabel recorderGenerateStatusLabel = new JLabel();
     private final JLabel recorderRunErrorLabel = new JLabel();
+    private String currentScriptPath;
 
     private final JComboBox<PageInfo> pageComboBox = new JComboBox<>();
     private final JSpinner connectTimeoutSpinner = new JSpinner(new SpinnerNumberModel(3000, 500, 120000, 500));
@@ -134,6 +149,7 @@ public final class MainFrame extends JFrame {
 
         bindEvents();
         updateConnectionState(false);
+        refreshScriptTree(null);
     }
 
     private JPanel createConnectionPanel() {
@@ -345,14 +361,82 @@ public final class MainFrame extends JFrame {
         javaSide.add(javaScroll, BorderLayout.CENTER);
         javaSide.add(createRecorderJavaActionPanel(), BorderLayout.SOUTH);
 
-        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, jsonSide, javaSide);
-        split.setResizeWeight(0.5);
+        JSplitPane editorsSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, jsonSide, javaSide);
+        editorsSplit.setResizeWeight(0.5);
+        editorsSplit.setContinuousLayout(true);
+        editorsSplit.setOneTouchExpandable(true);
+        editorsSplit.setBorder(null);
+
+        JSplitPane split = new JSplitPane(
+                JSplitPane.HORIZONTAL_SPLIT,
+                editorsSplit,
+                createScriptLibraryPanel()
+        );
+        split.setResizeWeight(0.78);
         split.setContinuousLayout(true);
         split.setOneTouchExpandable(true);
         split.setBorder(null);
 
         JPanel panel = new JPanel(new BorderLayout());
         panel.add(split, BorderLayout.CENTER);
+        return panel;
+    }
+
+    private JPanel createScriptLibraryPanel() {
+        DefaultMutableTreeNode root = new DefaultMutableTreeNode(
+                new ScriptTreeNode("", true, "スクリプト"));
+        scriptTree.setModel(new DefaultTreeModel(root));
+        scriptTree.setRootVisible(true);
+        scriptTree.setShowsRootHandles(true);
+        scriptTree.getSelectionModel().setSelectionMode(TreeSelectionModel.SINGLE_TREE_SELECTION);
+        scriptTree.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2) {
+                    loadScriptFromLibrary();
+                }
+            }
+        });
+
+        scriptFilterField.putClientProperty("JTextField.placeholderText", "フィルタ");
+        scriptFilterField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                refreshScriptTree(currentScriptPath);
+            }
+
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                refreshScriptTree(currentScriptPath);
+            }
+
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                refreshScriptTree(currentScriptPath);
+            }
+        });
+
+        JPanel filterRow = new JPanel(new BorderLayout(6, 0));
+        filterRow.setBorder(BorderFactory.createEmptyBorder(0, 4, 4, 4));
+        filterRow.add(new JLabel("フィルタ"), BorderLayout.WEST);
+        filterRow.add(scriptFilterField, BorderLayout.CENTER);
+
+        JScrollPane treeScroll = new JScrollPane(scriptTree);
+        treeScroll.setPreferredSize(new Dimension(220, 120));
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+        buttons.add(scriptLoadButton);
+        buttons.add(scriptDeleteButton);
+        buttons.add(scriptNewFolderButton);
+
+        JPanel north = new JPanel(new BorderLayout());
+        north.add(filterRow, BorderLayout.NORTH);
+
+        JPanel panel = new JPanel(new BorderLayout(0, 4));
+        panel.setBorder(BorderFactory.createTitledBorder("スクリプト"));
+        panel.add(north, BorderLayout.NORTH);
+        panel.add(treeScroll, BorderLayout.CENTER);
+        panel.add(buttons, BorderLayout.SOUTH);
         return panel;
     }
 
@@ -417,6 +501,7 @@ public final class MainFrame extends JFrame {
 
         JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         left.add(recorderClearButton);
+        left.add(scriptSaveButton);
 
         JPanel center = new JPanel(new FlowLayout(FlowLayout.CENTER, 6, 0));
         center.add(recorderSnippetButton);
@@ -437,7 +522,232 @@ public final class MainFrame extends JFrame {
         clearRecorderRunError();
         recorderJavaArea.setText(PlaywrightWorkspaceStore.defaultJavaText());
         recorderJavaArea.setCaretPosition(0);
+        currentScriptPath = null;
+        scriptTree.clearSelection();
         appendLog("Playwright コードをサンプルに戻しました");
+    }
+
+    private void loadScriptFromLibrary() {
+        ScriptTreeNode node = selectedScriptNode();
+        if (node == null || node.directory()) {
+            appendLog("読み込むスクリプトをツリーから選択してください");
+            return;
+        }
+        try {
+            String source = PlaywrightScriptLibraryStore.load(node.relativePath());
+            clearStrictModeState();
+            clearRecorderRunError();
+            recorderJavaArea.setText(source);
+            recorderJavaArea.setCaretPosition(0);
+            currentScriptPath = node.relativePath();
+            appendLog("スクリプトを読み込みました: " + node.relativePath());
+        } catch (Exception ex) {
+            appendLog("スクリプトの読込に失敗: " + ex.getMessage());
+        }
+    }
+
+    private void saveScriptToLibrary() {
+        ScriptTreeNode node = selectedScriptNode();
+        String parent = "";
+        if (node != null) {
+            parent = node.directory()
+                    ? node.relativePath()
+                    : PlaywrightScriptLibraryStore.parentPath(node.relativePath());
+        }
+        String suggested = node != null && !node.directory() ? node.displayName() : "";
+        String name = (String) JOptionPane.showInputDialog(
+                this,
+                "スクリプト名を入力してください"
+                        + (parent.isEmpty() ? "" : "\n保存先フォルダ: " + parent),
+                "保存",
+                JOptionPane.PLAIN_MESSAGE,
+                null,
+                null,
+                suggested
+        );
+        if (name == null) {
+            return;
+        }
+        String safeName = PlaywrightScriptLibraryStore.sanitizeName(name);
+        if (safeName == null) {
+            appendLog("スクリプト名が不正です");
+            return;
+        }
+        String targetPath = PlaywrightScriptLibraryStore.join(parent, safeName);
+        if (PlaywrightScriptLibraryStore.existsScript(targetPath)) {
+            int answer = JOptionPane.showConfirmDialog(
+                    this,
+                    "「" + targetPath + "」は既に存在します。上書きしますか？",
+                    "保存",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE
+            );
+            if (answer != JOptionPane.YES_OPTION) {
+                return;
+            }
+        }
+        try {
+            String saved = PlaywrightScriptLibraryStore.save(targetPath, recorderJavaArea.getText());
+            currentScriptPath = saved;
+            refreshScriptTree(saved);
+            appendLog("スクリプトを保存しました: " + saved
+                    + " → " + PlaywrightScriptLibraryStore.scriptsDir());
+        } catch (Exception ex) {
+            appendLog("スクリプトの保存に失敗: " + ex.getMessage());
+        }
+    }
+
+    private void deleteScriptFromLibrary() {
+        ScriptTreeNode node = selectedScriptNode();
+        if (node == null || node.relativePath().isEmpty()) {
+            appendLog("削除するスクリプトまたはフォルダを選択してください");
+            return;
+        }
+        String label = node.directory() ? "フォルダ「" + node.relativePath() + "」" : "「" + node.relativePath() + "」";
+        int answer = JOptionPane.showConfirmDialog(
+                this,
+                label + "を削除しますか？",
+                "スクリプトの削除",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE
+        );
+        if (answer != JOptionPane.YES_OPTION) {
+            return;
+        }
+        try {
+            PlaywrightScriptLibraryStore.delete(node.relativePath(), node.directory());
+            if (currentScriptPath != null && (
+                    currentScriptPath.equals(node.relativePath())
+                            || currentScriptPath.startsWith(node.relativePath() + "/")
+            )) {
+                currentScriptPath = null;
+            }
+            refreshScriptTree(null);
+            appendLog("削除しました: " + node.relativePath());
+        } catch (Exception ex) {
+            appendLog("削除に失敗: " + ex.getMessage());
+        }
+    }
+
+    private void createScriptFolder() {
+        ScriptTreeNode node = selectedScriptNode();
+        String parent = "";
+        if (node != null) {
+            parent = node.directory() ? node.relativePath() : PlaywrightScriptLibraryStore.parentPath(node.relativePath());
+        }
+        String name = JOptionPane.showInputDialog(
+                this,
+                "フォルダ名を入力してください",
+                "フォルダ作成",
+                JOptionPane.PLAIN_MESSAGE
+        );
+        if (name == null) {
+            return;
+        }
+        String safeName = PlaywrightScriptLibraryStore.sanitizeName(name);
+        if (safeName == null) {
+            appendLog("フォルダ名が不正です");
+            return;
+        }
+        String path = PlaywrightScriptLibraryStore.join(parent, safeName);
+        try {
+            String created = PlaywrightScriptLibraryStore.createDirectory(path);
+            refreshScriptTree(created);
+            appendLog("フォルダを作成しました: " + created);
+        } catch (Exception ex) {
+            appendLog("フォルダ作成に失敗: " + ex.getMessage());
+        }
+    }
+
+    private ScriptTreeNode selectedScriptNode() {
+        TreePath path = scriptTree.getSelectionPath();
+        if (path == null) {
+            return null;
+        }
+        Object last = path.getLastPathComponent();
+        if (!(last instanceof DefaultMutableTreeNode treeNode)) {
+            return null;
+        }
+        Object user = treeNode.getUserObject();
+        return user instanceof ScriptTreeNode scriptNode ? scriptNode : null;
+    }
+
+    private void refreshScriptTree(String selectPath) {
+        String keep = selectPath != null ? selectPath : currentScriptPath;
+        String filter = scriptFilterField.getText() == null ? "" : scriptFilterField.getText().trim();
+        DefaultMutableTreeNode root = new DefaultMutableTreeNode(
+                new ScriptTreeNode("", true, "スクリプト"));
+        populateScriptTree(root, "", filter);
+        scriptTree.setModel(new DefaultTreeModel(root));
+        expandScriptTree();
+        if (keep != null && !keep.isBlank()) {
+            selectScriptPath(keep);
+        }
+    }
+
+    private void populateScriptTree(DefaultMutableTreeNode parent, String relativeDir, String filter) {
+        for (PlaywrightScriptLibraryStore.Entry entry : PlaywrightScriptLibraryStore.listChildren(relativeDir)) {
+            if (entry.directory()) {
+                DefaultMutableTreeNode child = new DefaultMutableTreeNode(
+                        new ScriptTreeNode(entry.relativePath(), true, entry.displayName()));
+                populateScriptTree(child, entry.relativePath(), filter);
+                if (child.getChildCount() > 0 || matchesScriptFilter(entry.displayName(), filter)) {
+                    parent.add(child);
+                }
+            } else if (matchesScriptFilter(entry.displayName(), filter)) {
+                parent.add(new DefaultMutableTreeNode(
+                        new ScriptTreeNode(entry.relativePath(), false, entry.displayName())));
+            }
+        }
+    }
+
+    private static boolean matchesScriptFilter(String displayName, String filter) {
+        if (filter == null || filter.isBlank()) {
+            return true;
+        }
+        return displayName != null
+                && displayName.toLowerCase(java.util.Locale.ROOT)
+                .contains(filter.toLowerCase(java.util.Locale.ROOT));
+    }
+
+    private void expandScriptTree() {
+        for (int i = 0; i < scriptTree.getRowCount(); i++) {
+            scriptTree.expandRow(i);
+        }
+    }
+
+    private void selectScriptPath(String relativePath) {
+        DefaultMutableTreeNode root = (DefaultMutableTreeNode) scriptTree.getModel().getRoot();
+        DefaultMutableTreeNode found = findScriptNode(root, relativePath);
+        if (found == null) {
+            return;
+        }
+        TreePath path = new TreePath(found.getPath());
+        scriptTree.setSelectionPath(path);
+        scriptTree.scrollPathToVisible(path);
+    }
+
+    private static DefaultMutableTreeNode findScriptNode(DefaultMutableTreeNode node, String relativePath) {
+        Object user = node.getUserObject();
+        if (user instanceof ScriptTreeNode scriptNode
+                && relativePath.equals(scriptNode.relativePath())) {
+            return node;
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            DefaultMutableTreeNode child = (DefaultMutableTreeNode) node.getChildAt(i);
+            DefaultMutableTreeNode found = findScriptNode(child, relativePath);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    private record ScriptTreeNode(String relativePath, boolean directory, String displayName) {
+        @Override
+        public String toString() {
+            return displayName;
+        }
     }
 
     private void showRecorderGenerateStatus(String text, Color color) {
